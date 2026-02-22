@@ -26,12 +26,13 @@
 
     <style name="BottomSheetStyle" parent="Theme.Material3.DayNight.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/VGMP.BottomSheet</item>
-        <item name="android:colorBackground">@color/vgmp_surface</item>
+        <item name="android:colorBackground">@android:color/transparent</item>
         <item name="android:navigationBarColor">@color/vgmp_background</item>
+        <item name="android:windowIsTranslucent">true</item>
     </style>
 
     <style name="VGMP.BottomSheet" parent="Widget.Material3.BottomSheet">
-        <item name="backgroundTint">@color/vgmp_surface</item>
+        <item name="backgroundTint">@android:color/transparent</item>
     </style>
 
     <style name="VGMP.Button.Green" parent="Widget.Material3.Button">

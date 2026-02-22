@@ -5,7 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
-    android:background="@color/vgmp_background">
+    android:background="#E61a1a1a">
 
         <LinearLayout
             android:id="@+id/content_container"
