@@ -1,7 +1,6 @@
 package org.vlessert.vgmp.ui
 
 import android.graphics.BitmapFactory
-import android.media.audiofx.Visualizer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,7 +10,10 @@ import android.view.ViewGroup
 import android.widget.SeekBar
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentNowPlayingBinding
@@ -27,7 +29,6 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
     private val service: VgmPlaybackService? get() = (activity as? org.vlessert.vgmp.MainActivity)?.getService()
     private val handler = Handler(Looper.getMainLooper())
     private var isSeeking = false
-    private var visualizer: Visualizer? = null
 
     companion object {
         fun newInstance() = NowPlayingFragment()
@@ -47,11 +48,11 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         updateUI()
         startPositionUpdater()
         observePlaybackInfo()
+        startSpectrumObserver()
     }
 
     fun onServiceConnected(svc: VgmPlaybackService) {
         observePlaybackInfo()
-        startVisualizer()
     }
 
     private fun observePlaybackInfo() {
@@ -76,13 +77,18 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         binding.btnNext.setOnClickListener { service?.nextTrack() }
         binding.btnRandom.setOnClickListener {
             val svc = service ?: return@setOnClickListener
-            binding.btnRandom.isSelected = !binding.btnRandom.isSelected
-            svc.setRandom(binding.btnRandom.isSelected)
+            val nextMode = when (svc.getShuffle()) {
+                VgmPlaybackService.ShuffleMode.OFF -> VgmPlaybackService.ShuffleMode.GAME
+                VgmPlaybackService.ShuffleMode.GAME -> VgmPlaybackService.ShuffleMode.ALL
+                VgmPlaybackService.ShuffleMode.ALL -> VgmPlaybackService.ShuffleMode.OFF
+            }
+            svc.setShuffle(nextMode)
+            updateModeButtons()
         }
         binding.btnLoop.setOnClickListener {
             val svc = service ?: return@setOnClickListener
-            binding.btnLoop.isSelected = !binding.btnLoop.isSelected
-            svc.setLoop(binding.btnLoop.isSelected)
+            svc.setLoop(!svc.getLoop())
+            updateModeButtons()
         }
     }
 
@@ -155,7 +161,50 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         }
         
         updatePlayPauseButton()
-        startVisualizer() // Refresh if session changed
+        updateModeButtons()
+    }
+
+    private fun startSpectrumObserver() {
+        val binding = _binding ?: return
+        val svc = service ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                svc.spectrum.collect { magnitudes ->
+                    binding.spectrumView.updateFFT(magnitudes)
+                }
+            }
+        }
+    }
+
+    private fun updateModeButtons() {
+        val binding = _binding ?: return
+        val svc = service ?: return
+        
+        // Random button color/icon
+        when (svc.getShuffle()) {
+            VgmPlaybackService.ShuffleMode.OFF -> {
+                binding.btnRandom.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
+                binding.btnRandom.alpha = 0.5f
+            }
+            VgmPlaybackService.ShuffleMode.GAME -> {
+                binding.btnRandom.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
+                binding.btnRandom.alpha = 1.0f
+                // Maybe change icon or show a "G" badge? For now just color.
+            }
+            VgmPlaybackService.ShuffleMode.ALL -> {
+                binding.btnRandom.setColorFilter(resources.getColor(R.color.white, null))
+                binding.btnRandom.alpha = 1.0f
+            }
+        }
+        
+        // Loop button color
+        if (svc.getLoop()) {
+            binding.btnLoop.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
+            binding.btnLoop.alpha = 1.0f
+        } else {
+            binding.btnLoop.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
+            binding.btnLoop.alpha = 0.5f
+        }
     }
 
     private suspend fun updateVolumeSliders() {
@@ -188,33 +237,6 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                 container.addView(view)
             }
         }
-    }
-
-    private fun startVisualizer() {
-        if (visualizer != null) return
-        val sessionId = service?.audioSessionId ?: 0
-        if (sessionId == 0) return
-        
-        try {
-            visualizer = Visualizer(sessionId).apply {
-                captureSize = Visualizer.getCaptureSizeRange()[1]
-                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-                    override fun onWaveFormDataCapture(v: Visualizer?, w: ByteArray?, s: Int) {}
-                    override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, s: Int) {
-                        fft?.let { _binding?.spectrumView?.updateFFT(it) }
-                    }
-                }, Visualizer.getMaxCaptureRate() / 2, false, true)
-                enabled = true
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("NowPlaying", "Visualizer fail", e)
-        }
-    }
-
-    private fun stopVisualizer() {
-        visualizer?.enabled = false
-        visualizer?.release()
-        visualizer = null
     }
 
     private fun updatePlayPauseButton() {
@@ -254,7 +276,6 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
 
     override fun onDestroyView() {
         handler.removeCallbacksAndMessages(null)
-        stopVisualizer()
         super.onDestroyView()
         _binding = null
     }

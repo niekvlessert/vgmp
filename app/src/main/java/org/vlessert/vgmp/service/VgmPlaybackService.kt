@@ -26,6 +26,7 @@ import androidx.media.MediaBrowserServiceCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.R
@@ -51,7 +52,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         const val ACTION_STOP   = "org.vlessert.vgmp.ACTION_STOP"
         const val MEDIA_ID_ROOT = "root"
         private const val TAG = "VgmPlaybackService"
+        private const val FADE_MS = 2000L
     }
+
+    enum class ShuffleMode { OFF, GAME, ALL }
 
     private lateinit var mediaSession: MediaSessionCompat
     private var audioTrack: AudioTrack? = null
@@ -64,12 +68,20 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var isPlaying = false
     private var isPaused  = false
     private var shouldPlayAfterFocusGain = false
-    private var randomEnabled = false
-    private var loopEnabled   = false
+    private var shuffleMode = ShuffleMode.OFF
+    private var loopEnabled  = false
     private var currentTags = VgmTags()
     private var trackDurationMs = 0L
 
+    // For fade out
+    private var fadeStartTimeMs = 0L
+    private var isFadingOut = false
+    private var currentVolume = 1.0f
+
     // Render thread
+    private val _spectrum = MutableStateFlow(FloatArray(512))
+    val spectrum: StateFlow<FloatArray> = _spectrum.asStateFlow()
+
     private var renderJob: Job? = null
     private val renderBuffer = ShortArray(BUFFER_FRAMES * 2)  // interleaved stereo
 
@@ -174,7 +186,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             loopEnabled = repeatMode == PlaybackStateCompat.REPEAT_MODE_ONE
         }
         override fun onSetShuffleMode(shuffleMode: Int) {
-            randomEnabled = shuffleMode == PlaybackStateCompat.SHUFFLE_MODE_ALL
+            this@VgmPlaybackService.shuffleMode = when(shuffleMode) {
+                PlaybackStateCompat.SHUFFLE_MODE_ALL -> ShuffleMode.ALL
+                PlaybackStateCompat.SHUFFLE_MODE_GROUP -> ShuffleMode.GAME
+                else -> ShuffleMode.OFF
+            }
         }
     }
 
@@ -333,10 +349,23 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     }
                     val framesWritten = VgmEngine.fillBuffer(renderBuffer, BUFFER_FRAMES)
                     if (framesWritten > 0) {
+                        applyVolumeAndFade(renderBuffer, framesWritten)
                         audioTrack?.write(renderBuffer, 0, framesWritten * 2)
+
+                        // Update spectrum for UI
+                        val spectrumBuffer = FloatArray(512)
+                        VgmEngine.getSpectrum(spectrumBuffer)
+                        _spectrum.emit(spectrumBuffer)
                     }
+                    
+                    // Trigger fade out before actual end if we know the duration
+                    val pos = currentPositionMs()
+                    if (trackDurationMs > 0 && pos >= trackDurationMs - FADE_MS && !isFadingOut) {
+                        startFadeOut()
+                    }
+
                     // Check if track ended
-                    if (VgmEngine.isEnded()) {
+                    if (VgmEngine.isEnded() || (isFadingOut && SystemClock.elapsedRealtime() >= fadeStartTimeMs + FADE_MS)) {
                         onTrackEnded()
                         break
                     }
@@ -347,9 +376,27 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         }
     }
 
+    private fun startFadeOut() {
+        if (isFadingOut) return
+        isFadingOut = true
+        fadeStartTimeMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun applyVolumeAndFade(buffer: ShortArray, frames: Int) {
+        if (!isFadingOut) return
+        
+        val elapsed = SystemClock.elapsedRealtime() - fadeStartTimeMs
+        val fadeFactor = (1.0f - (elapsed.toFloat() / FADE_MS)).coerceIn(0f, 100f)
+        
+        for (i in 0 until (frames * 2)) {
+            buffer[i] = (buffer[i] * fadeFactor).toInt().toShort()
+        }
+    }
+
     private fun stopRenderJob() {
         renderJob?.cancel()
         renderJob = null
+        isFadingOut = false
         audioTrack?.pause()
         audioTrack?.flush()
     }
@@ -416,24 +463,50 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     fun nextTrack() {
-        serviceScope.launch {
-            allGames = GameLibrary.getAllGames()
-            if (allGames.isEmpty()) return@launch
-            val (nextG, nextT) = if (randomEnabled) {
-                val gi = (0 until allGames.size).random()
-                val ti = (0 until (allGames[gi].tracks.size.coerceAtLeast(1))).random()
+        if (!isFadingOut) {
+            // Manual skip - maybe smaller fade or immediate?
+            // User requested fade out to next track.
+            serviceScope.launch {
+                startFadeOut()
+                delay(500) // Short fade for manual skip
+                performNextTrack()
+            }
+        } else {
+            serviceScope.launch { performNextTrack() }
+        }
+    }
+
+    private suspend fun performNextTrack() {
+        allGames = GameLibrary.getAllGames()
+        if (allGames.isEmpty()) return
+        
+        val (nextG, nextT) = when (shuffleMode) {
+            ShuffleMode.ALL -> {
+                val gi = (allGames.indices).random()
+                val ti = (allGames[gi].tracks.indices).random()
                 gi to ti
-            } else {
+            }
+            ShuffleMode.GAME -> {
+                val game = allGames.getOrNull(currentGameIdx) ?: allGames[0]
+                val gi = allGames.indexOf(game)
+                val ti = (game.tracks.indices).random()
+                gi to ti
+            }
+            ShuffleMode.OFF -> {
                 val game = allGames.getOrNull(currentGameIdx)
                 if (game != null && currentTrackIdx + 1 < game.tracks.size) {
                     currentGameIdx to currentTrackIdx + 1
+                } else if (loopEnabled && game != null) {
+                    // Loop to start of this game
+                    currentGameIdx to 0
                 } else {
+                    // Move to next game
                     val nextG2 = (currentGameIdx + 1) % allGames.size
                     nextG2 to 0
                 }
             }
-            loadAndPlay(nextG, nextT)
         }
+        loadAndPlay(nextG, nextT)
     }
 
     fun previousTrack() {
@@ -612,7 +685,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     val playing: Boolean get() = isPlaying && !isPaused
     val paused:  Boolean get() = isPlaying && isPaused
     fun getMediaSession() = mediaSession
-    val audioSessionId: Int get() = audioTrack?.audioSessionId ?: 0
     fun getAllLoadedGames() = allGames
     fun refreshGames() { serviceScope.launch { allGames = GameLibrary.getAllGames() } }
     fun playTrack(game: Game, trackIdx: Int) {
@@ -621,6 +693,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             serviceScope.launch { loadAndPlay(gIdx, trackIdx) }
         }
     }
-    fun setRandom(enabled: Boolean) { randomEnabled = enabled }
+    fun setShuffle(mode: ShuffleMode) { shuffleMode = mode }
+    fun getShuffle(): ShuffleMode = shuffleMode
     fun setLoop(enabled: Boolean) { loopEnabled = enabled }
+    fun getLoop(): Boolean = loopEnabled
 }

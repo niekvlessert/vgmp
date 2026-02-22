@@ -6,7 +6,10 @@
  * AudioTrack.
  */
 
+#include <algorithm>
 #include <android/log.h>
+#include <cmath>
+#include <complex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +33,38 @@ static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
 static UINT32 gSampleRate = 44100;
 static std::string gRomPath = "";
+
+// FFT / Spectrum State
+#define FFT_SIZE 1024
+static float gFftRingBuffer[FFT_SIZE];
+static int gFftWriteIdx = 0;
+
+typedef std::complex<float> Complex;
+static void fft_process(std::vector<Complex> &a) {
+  int n = a.size();
+  for (int i = 1, j = 0; i < n; i++) {
+    int bit = n >> 1;
+    for (; j & bit; bit >>= 1)
+      j ^= bit;
+    j ^= bit;
+    if (i < j)
+      std::swap(a[i], a[j]);
+  }
+  for (int len = 2; len <= n; len <<= 1) {
+    float ang = 2.0f * 3.14159265f / (float)len;
+    Complex wlen(std::cos(ang), std::sin(ang));
+    for (int i = 0; i < n; i += len) {
+      Complex w(1.0f, 0.0f);
+      for (int j = 0; j < len / 2; j++) {
+        Complex u = a[i + j];
+        Complex v = a[i + j + len / 2] * w;
+        a[i + j] = u + v;
+        a[i + j + len / 2] = u - v;
+        w *= wlen;
+      }
+    }
+  }
+}
 
 static DATA_LOADER *RequestFileCallback(void *userParam, PlayerBase *player,
                                         const char *fileName) {
@@ -74,6 +109,8 @@ static void cleanup() {
     free(gChipBuf);
     gChipBuf = nullptr;
   }
+  std::memset(gFftRingBuffer, 0, sizeof(gFftRingBuffer));
+  gFftWriteIdx = 0;
 }
 
 extern "C" {
@@ -252,6 +289,10 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
         r = -32768;
       dst[(written + i) * 2] = (jshort)l;
       dst[(written + i) * 2 + 1] = (jshort)r;
+
+      // Feed mono sample to FFT ring buffer
+      gFftRingBuffer[gFftWriteIdx] = (float)(l + r) / 65536.0f;
+      gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
     }
     written += (jint)got;
     remaining -= (jint)got;
@@ -269,6 +310,41 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
   }
 
   return written;
+}
+
+JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
+    JNIEnv *env, jclass cls, jfloatArray outMagnitudes) {
+  int n = FFT_SIZE;
+  std::vector<Complex> a(n);
+
+  // Read from ring buffer (start from current writeIdx to get latest)
+  for (int i = 0; i < n; i++) {
+    a[i] = Complex(gFftRingBuffer[(gFftWriteIdx + i) % n], 0.0f);
+  }
+
+  // Apply Hanning window
+  for (int i = 0; i < n; i++) {
+    float multiplier =
+        0.5f *
+        (1.0f - std::cos(2.0f * 3.14159265f * (float)i / (float)(n - 1)));
+    a[i] *= multiplier;
+  }
+
+  fft_process(a);
+
+  jfloat *dst = env->GetFloatArrayElements(outMagnitudes, nullptr);
+  if (!dst)
+    return;
+
+  int outSize = n / 2;
+  float maxMag = 0.0f;
+  for (int i = 0; i < outSize; i++) {
+    dst[i] = std::abs(a[i]);
+    if (dst[i] > maxMag)
+      maxMag = dst[i];
+  }
+
+  env->ReleaseFloatArrayElements(outMagnitudes, dst, 0);
 }
 
 /**

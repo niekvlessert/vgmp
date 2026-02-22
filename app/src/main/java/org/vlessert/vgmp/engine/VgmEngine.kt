@@ -39,6 +39,7 @@ object VgmEngine {
      * Returns tag string: "TrkE|||TrkJ|||GmE|||GmJ|||SysE|||SysJ|||AutE|||AutJ|||..."
      */
     @JvmStatic external fun nGetTags(): String
+    @JvmStatic external fun nGetSpectrum(magnitudes: FloatArray)
 
     /** Scan a VGM file's length without loading it as active track */
     @JvmStatic external fun nGetTrackLengthDirect(path: String): Long
@@ -62,6 +63,7 @@ object VgmEngine {
     suspend fun seek(samplePos: Long) = mutex.withLock { nSeek(samplePos) }
     suspend fun fillBuffer(buffer: ShortArray, frames: Int): Int = mutex.withLock { nFillBuffer(buffer, frames) }
     suspend fun getTags(): String = mutex.withLock { nGetTags() }
+    suspend fun getSpectrum(magnitudes: FloatArray) = mutex.withLock { nGetSpectrum(magnitudes) }
     suspend fun getTrackLengthDirect(path: String): Long = mutex.withLock { nGetTrackLengthDirect(path) }
     suspend fun getDeviceCount(): Int = mutex.withLock { nGetDeviceCount() }
     suspend fun getDeviceName(id: Int): String = mutex.withLock { nGetDeviceName(id) }
@@ -74,6 +76,7 @@ object VgmEngine {
     fun parseTags(raw: String): VgmTags {
         val parts = raw.split("|||")
         fun get(i: Int) = parts.getOrElse(i) { "" }.trim()
+        // libvgm returns [TrackEn, TrackJp, GameEn, GameJp, SystemEn, SystemJp, AuthorEn, AuthorJp, Date, Creator, Notes]
         return VgmTags(
             trackEn  = get(0),
             trackJp  = get(1),
@@ -114,23 +117,23 @@ data class VgmTags(
     val notes:    String = ""
 ) {
     val displayTitle: String get() = when {
+        trackEn.isNotEmpty() && trackJp.isNotEmpty() && trackEn != trackJp -> "$trackEn ($trackJp)"
         trackEn.isNotEmpty() -> trackEn
-        trackJp.isNotEmpty() -> trackJp
-        else -> "Unknown Track"
+        else -> trackJp.ifEmpty { "Unknown Track" }
     }
     val displayGame: String get() = when {
+        gameEn.isNotEmpty() && gameJp.isNotEmpty() && gameEn != gameJp -> "$gameEn ($gameJp)"
         gameEn.isNotEmpty() -> gameEn
-        gameJp.isNotEmpty() -> gameJp
-        else -> "Unknown Game"
+        else -> gameJp.ifEmpty { "Unknown Game" }
     }
     val displaySystem: String get() = when {
+        systemEn.isNotEmpty() && systemJp.isNotEmpty() && systemEn != systemJp -> "$systemEn ($systemJp)"
         systemEn.isNotEmpty() -> systemEn
-        systemJp.isNotEmpty() -> systemJp
-        else -> ""
+        else -> systemJp
     }
     val displayAuthor: String get() = when {
+        authorEn.isNotEmpty() && authorJp.isNotEmpty() && authorEn != authorJp -> "$authorEn ($authorJp)"
         authorEn.isNotEmpty() -> authorEn
-        authorJp.isNotEmpty() -> authorJp
-        else -> ""
+        else -> authorJp
     }
 }
