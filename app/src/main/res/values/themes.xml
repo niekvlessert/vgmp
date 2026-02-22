@@ -27,6 +27,7 @@
     <style name="BottomSheetStyle" parent="Theme.Material3.DayNight.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/VGMP.BottomSheet</item>
         <item name="android:colorBackground">@color/vgmp_surface</item>
+        <item name="android:navigationBarColor">@color/vgmp_background</item>
     </style>
 
     <style name="VGMP.BottomSheet" parent="Widget.Material3.BottomSheet">

@@ -1,6 +1,7 @@
 package org.vlessert.vgmp.ui
 
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -45,6 +46,9 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         updateUI()
         startPositionUpdater()
         observePlaybackInfo()
+        
+        // Set navigation bar color on the dialog's window to match player background
+        dialog?.window?.navigationBarColor = requireContext().getColor(R.color.vgmp_background)
     }
 
     fun onServiceConnected(svc: VgmPlaybackService) {
