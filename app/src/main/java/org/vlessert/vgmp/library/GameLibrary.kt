@@ -12,6 +12,8 @@ import java.util.zip.ZipInputStream
 private const val TAG = "GameLibrary"
 private const val MAX_SEARCH_RESULTS = 50
 private val VGM_EXTENSIONS = listOf(".vgm", ".vgz")
+private val GME_EXTENSIONS = listOf(".nsf", ".nsfe", ".gbs", ".gym", ".hes", ".kss", ".ay", ".sap", ".spc")
+private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS
 
 /** In-memory representation of a loaded game (used in UI / service) */
 data class Game(
@@ -61,6 +63,39 @@ object GameLibrary {
                 }
             }
         }
+    
+    /**
+     * Load bundled single audio files (NSF, etc.) on first run.
+     * assetFiles: list of asset paths like "Shovel_Knight_Music.nsf"
+     * This will import files that don't already exist in the library.
+     */
+    suspend fun loadBundledAudioFilesIfNeeded(context: Context, assetFiles: List<String>) =
+        withContext(Dispatchers.IO) {
+            for (assetPath in assetFiles) {
+                try {
+                    val fileName = assetPath.substringAfterLast('/')
+                    val gameName = fileName.substringBeforeLast('.')
+                    
+                    // Check if this game already exists
+                    if (db.gameDao().searchGames(gameName).isNotEmpty()) {
+                        Log.d(TAG, "Game '$gameName' already exists, skipping bundled asset")
+                        continue
+                    }
+                    
+                    // Copy asset to a temp file then import
+                    val tempFile = File(context.cacheDir, fileName)
+                    context.assets.open(assetPath).use { input ->
+                        tempFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    importSingleFile(tempFile)
+                    tempFile.delete()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load bundled audio file $assetPath", e)
+                }
+            }
+        }
 
     /**
      * Import a ZIP file (from any InputStream) into the library.
@@ -98,7 +133,7 @@ object GameLibrary {
                     val outFile = File(gameFolder, sanitizeFilename(name))
                     outFile.outputStream().use { out -> zis.copyTo(out) }
                     when {
-                        name.endsWith(".vgm", true) || name.endsWith(".vgz", true) ->
+                        ALL_AUDIO_EXTENSIONS.any { ext -> name.endsWith(ext, true) } ->
                             vgmFiles.add(outFile)
                         name.endsWith(".png", true) -> artFile = outFile
                         name.endsWith(".m3u", true) -> {
@@ -122,10 +157,10 @@ object GameLibrary {
             }
         }
 
-        Log.d(TAG, "Imported $zipName: ${vgmFiles.size} VGM files, art=${artFile != null}, m3u=${m3uContent != null}")
+        Log.d(TAG, "Imported $zipName: ${vgmFiles.size} audio files, art=${artFile != null}, m3u=${m3uContent != null}")
 
         if (vgmFiles.isEmpty()) {
-            Log.w(TAG, "No VGM files found in $zipName")
+            Log.w(TAG, "No audio files found in $zipName")
             return null
         }
 
@@ -304,5 +339,135 @@ object GameLibrary {
     /** Check if a game with the given name exists (case-insensitive partial match) */
     suspend fun gameExists(name: String): Boolean = withContext(Dispatchers.IO) {
         db.gameDao().searchGames(name).isNotEmpty()
+    }
+    
+    /**
+     * Import a single audio file (NSF, VGM, etc.) directly without a ZIP.
+     * Creates a game entry with a single track.
+     * For multi-track files like NSF, creates multiple track entries.
+     */
+    suspend fun importSingleFile(file: File): Game? = withContext(Dispatchers.IO) {
+        try {
+            _importSingleFile(file)
+        } catch (e: Exception) {
+            Log.e(TAG, "importSingleFile failed for ${file.name}", e)
+            null
+        }
+    }
+    
+    private suspend fun _importSingleFile(file: File): Game? {
+        val fileName = file.nameWithoutExtension
+        val gameFolder = File(gamesDir, sanitizeFilename(fileName)).also { it.mkdirs() }
+        
+        // Copy file to game folder
+        val destFile = File(gameFolder, file.name)
+        file.copyTo(destFile, overwrite = true)
+        
+        VgmEngine.setSampleRate(44100)
+        var gameName = fileName
+        var systemName = ""
+        var authorName = ""
+        var yearStr = ""
+        
+        // Check if this is a multi-track file (NSF, GBS, etc.)
+        val isMultiTrack = VgmEngine.isMultiTrack(destFile.absolutePath)
+        val trackCount = if (isMultiTrack) {
+            // Open to get track count
+            if (VgmEngine.open(destFile.absolutePath)) {
+                val count = VgmEngine.getTrackCount()
+                VgmEngine.close()
+                count
+            } else 1
+        } else 1
+        
+        // Get tags from file
+        try {
+            if (VgmEngine.open(destFile.absolutePath)) {
+                val tags = VgmEngine.parseTags(VgmEngine.getTags())
+                if (tags.gameEn.isNotEmpty()) gameName = tags.gameEn
+                else if (tags.gameJp.isNotEmpty()) gameName = tags.gameJp
+                if (tags.systemEn.isNotEmpty()) systemName = tags.systemEn
+                else if (tags.systemJp.isNotEmpty()) systemName = tags.systemJp
+                if (tags.authorEn.isNotEmpty()) authorName = tags.authorEn
+                else if (tags.authorJp.isNotEmpty()) authorName = tags.authorJp
+                yearStr = tags.date
+                VgmEngine.close()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not get tags from ${file.name}")
+        }
+        
+        // Check for existing game
+        val existingGame = db.gameDao().findByPath(gameFolder.absolutePath)
+        if (existingGame != null) {
+            val tracks = db.trackDao().getTracksForGame(existingGame.id)
+            return Game(existingGame, tracks, null)
+        }
+        
+        // Create game entry
+        val tempGameEntity = GameEntity(
+            name = gameName,
+            system = systemName,
+            author = authorName,
+            year = yearStr,
+            folderPath = gameFolder.absolutePath,
+            artPath = "",
+            zipSource = file.name
+        )
+        val gameId = db.gameDao().insertGame(tempGameEntity)
+        
+        // Create track entries
+        val trackEntities = mutableListOf<TrackEntity>()
+        
+        if (isMultiTrack && trackCount > 1) {
+            // Multi-track file (NSF, GBS, etc.)
+            for (i in 0 until trackCount) {
+                val durationSamples = try {
+                    VgmEngine.getTrackLengthDirect(destFile.absolutePath)
+                } catch (e: Exception) { -1L }
+                
+                trackEntities.add(TrackEntity(
+                    id = 0,
+                    gameId = gameId,
+                    title = "Track ${i + 1}",
+                    filePath = destFile.absolutePath,
+                    durationSamples = durationSamples,
+                    trackIndex = i,
+                    isFavorite = false,
+                    subTrackIndex = i
+                ))
+            }
+        } else {
+            // Single-track file
+            val durationSamples = try {
+                VgmEngine.getTrackLengthDirect(destFile.absolutePath)
+            } catch (e: Exception) { -1L }
+            
+            trackEntities.add(TrackEntity(
+                id = 0,
+                gameId = gameId,
+                title = fileName,
+                filePath = destFile.absolutePath,
+                durationSamples = durationSamples,
+                trackIndex = 0,
+                isFavorite = false
+            ))
+        }
+        
+        // Update game with resolved name
+        val gameEntity = GameEntity(
+            id = gameId,
+            name = gameName,
+            system = systemName,
+            author = authorName,
+            year = yearStr,
+            folderPath = gameFolder.absolutePath,
+            artPath = "",
+            zipSource = file.name
+        )
+        db.gameDao().insertGame(gameEntity)
+        db.trackDao().insertTracks(trackEntities)
+        
+        return Game(gameEntity, trackEntities, null)
     }
 }

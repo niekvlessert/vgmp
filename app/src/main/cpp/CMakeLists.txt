@@ -27,14 +27,28 @@ add_definitions(
 set(UTIL_CHARSET_CONV OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libvgm vgm_build)
 
+# Include libgme for NSF and other formats
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GME_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(GME_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(GME_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GME_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(GME_ZLIB OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libgme gme_build)
+
 # JNI glue shared library
 add_library(vgmplayer SHARED vgmplayer_jni.cpp)
 
-target_include_directories(vgmplayer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/libvgm)
+target_include_directories(vgmplayer PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/libvgm
+    ${CMAKE_CURRENT_SOURCE_DIR}/libgme/gme
+)
+
 target_link_libraries(vgmplayer
     vgm-player
     vgm-emu
     vgm-utils
+    gme_static
     log
     android
 )

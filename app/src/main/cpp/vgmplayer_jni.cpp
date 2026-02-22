@@ -1,9 +1,8 @@
 /*
  * vgmplayer_jni.cpp
  *
- * JNI glue layer between Android/Kotlin and libvgm.
- * Based on vgmplay_glue.cpp from vgmplay-js-2 but outputs int16 PCM for
- * AudioTrack.
+ * JNI glue layer between Android/Kotlin and libvgm/libgme.
+ * Supports VGM/VGZ via libvgm and NSF/NSFE/GBS/SPC/etc via libgme.
  */
 
 #include <algorithm>
@@ -24,15 +23,27 @@
 #include "libvgm/utils/DataLoader.h"
 #include "libvgm/utils/FileLoader.h"
 
+// libgme for NSF and other formats
+#include "gme.h"
+
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "VgmJNI", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VgmJNI", __VA_ARGS__)
 
-static VGMPlayer *gPlayer = nullptr;
+// Player type enumeration
+enum class PlayerType { NONE, LIBVGM, LIBGME };
+
+static PlayerType gPlayerType = PlayerType::NONE;
+static VGMPlayer *gVgmPlayer = nullptr;
+static Music_Emu *gGmePlayer = nullptr;
 static DATA_LOADER *gLoader = nullptr;
 static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
 static UINT32 gSampleRate = 44100;
 static std::string gRomPath = "";
+
+// Current track index for libgme (NSF can have multiple tracks)
+static int gGmeTrackIndex = 0;
+static int gGmeTrackCount = 0;
 
 // FFT / Spectrum State
 #define FFT_SIZE 1024
@@ -90,13 +101,49 @@ static DATA_LOADER *RequestFileCallback(void *userParam, PlayerBase *player,
   return nullptr;
 }
 
-static void cleanup() {
-  if (gPlayer) {
-    gPlayer->Stop();
-    gPlayer->UnloadFile();
-    delete gPlayer;
-    gPlayer = nullptr;
+// Check if file extension is supported by libgme
+static bool isGmeFormat(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext) return false;
+  ext++; // skip the dot
+  
+  // Convert to lowercase for comparison
+  char lowerExt[8] = {0};
+  for (int i = 0; ext[i] && i < 7; i++) {
+    lowerExt[i] = tolower(ext[i]);
   }
+  
+  // libgme supported formats
+  return (strcmp(lowerExt, "nsf") == 0 ||
+          strcmp(lowerExt, "nsfe") == 0 ||
+          strcmp(lowerExt, "gbs") == 0 ||
+          strcmp(lowerExt, "gym") == 0 ||
+          strcmp(lowerExt, "hes") == 0 ||
+          strcmp(lowerExt, "kss") == 0 ||
+          strcmp(lowerExt, "ay") == 0 ||
+          strcmp(lowerExt, "sap") == 0 ||
+          strcmp(lowerExt, "spc") == 0);
+}
+
+static void cleanup() {
+  // Cleanup libvgm
+  if (gVgmPlayer) {
+    gVgmPlayer->Stop();
+    gVgmPlayer->UnloadFile();
+    delete gVgmPlayer;
+    gVgmPlayer = nullptr;
+  }
+  
+  // Cleanup libgme
+  if (gGmePlayer) {
+    gme_delete(gGmePlayer);
+    gGmePlayer = nullptr;
+  }
+  
+  gPlayerType = PlayerType::NONE;
+  gGmeTrackIndex = 0;
+  gGmeTrackCount = 0;
+  
   if (gLoader) {
     DataLoader_Deinit(gLoader);
     gLoader = nullptr;
@@ -111,25 +158,6 @@ static void cleanup() {
   }
   std::memset(gFftRingBuffer, 0, sizeof(gFftRingBuffer));
   gFftWriteIdx = 0;
-}
-
-extern "C" {
-
-// org.vlessert.vgmp.engine.VgmEngine native methods
-
-JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetSampleRate(
-    JNIEnv *env, jclass cls, jint rate) {
-  gSampleRate = (UINT32)rate;
-  if (gPlayer)
-    gPlayer->SetSampleRate(gSampleRate);
-}
-
-JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetRomPath(
-    JNIEnv *env, jclass cls, jstring jpath) {
-  const char *path = env->GetStringUTFChars(jpath, nullptr);
-  gRomPath = path;
-  env->ReleaseStringUTFChars(jpath, path);
-  LOGD("nSetRomPath: %s", gRomPath.c_str());
 }
 
 #include "libvgm/utils/StrUtils.h"
@@ -151,6 +179,25 @@ UINT8 CPConv_StrConvert(CPCONV *cpc, size_t *outSize, char **outStr,
 }
 }
 
+extern "C" {
+
+// org.vlessert.vgmp.engine.VgmEngine native methods
+
+JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetSampleRate(
+    JNIEnv *env, jclass cls, jint rate) {
+  gSampleRate = (UINT32)rate;
+  if (gVgmPlayer)
+    gVgmPlayer->SetSampleRate(gSampleRate);
+}
+
+JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetRomPath(
+    JNIEnv *env, jclass cls, jstring jpath) {
+  const char *path = env->GetStringUTFChars(jpath, nullptr);
+  gRomPath = path;
+  env->ReleaseStringUTFChars(jpath, path);
+  LOGD("nSetRomPath: %s", gRomPath.c_str());
+}
+
 JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     JNIEnv *env, jclass cls, jstring jpath) {
   cleanup();
@@ -158,6 +205,38 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
   const char *path = env->GetStringUTFChars(jpath, nullptr);
   LOGD("nOpen: %s", path);
 
+  // Check if this is a libgme format
+  if (isGmeFormat(path)) {
+    LOGD("Detected libgme format: %s", path);
+    
+    gme_err_t err = gme_open_file(path, &gGmePlayer, gSampleRate);
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    if (err) {
+      LOGE("gme_open_file failed: %s", err);
+      gGmePlayer = nullptr;
+      return JNI_FALSE;
+    }
+    
+    gPlayerType = PlayerType::LIBGME;
+    gGmeTrackCount = gme_track_count(gGmePlayer);
+    gGmeTrackIndex = 0;
+    
+    // Start first track
+    err = gme_start_track(gGmePlayer, 0);
+    if (err) {
+      LOGE("gme_start_track failed: %s", err);
+      gme_delete(gGmePlayer);
+      gGmePlayer = nullptr;
+      gPlayerType = PlayerType::NONE;
+      return JNI_FALSE;
+    }
+    
+    LOGD("nOpen: libgme success, %d tracks, sampleRate=%u", gGmeTrackCount, gSampleRate);
+    return JNI_TRUE;
+  }
+
+  // Use libvgm for VGM/VGZ files
   gLoader = FileLoader_Init(path);
   if (!gLoader) {
     LOGE("FileLoader_Init failed for %s", path);
@@ -174,27 +253,28 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
 
   env->ReleaseStringUTFChars(jpath, path);
 
-  gPlayer = new VGMPlayer();
-  gPlayer->SetSampleRate(gSampleRate);
-  gPlayer->SetFileReqCallback(RequestFileCallback, nullptr);
+  gVgmPlayer = new VGMPlayer();
+  gVgmPlayer->SetSampleRate(gSampleRate);
+  gVgmPlayer->SetFileReqCallback(RequestFileCallback, nullptr);
 
   VGM_PLAY_OPTIONS opts;
   memset(&opts, 0, sizeof(opts));
   opts.playbackHz = 0;
-  gPlayer->SetPlayerOptions(opts);
+  gVgmPlayer->SetPlayerOptions(opts);
 
-  if (gPlayer->LoadFile(gLoader)) {
+  if (gVgmPlayer->LoadFile(gLoader)) {
     LOGE("LoadFile failed");
-    delete gPlayer;
-    gPlayer = nullptr;
+    delete gVgmPlayer;
+    gVgmPlayer = nullptr;
     DataLoader_Deinit(gLoader);
     gLoader = nullptr;
     return JNI_FALSE;
   }
 
-  gPlayer->SetSampleRate(gSampleRate);
-  gPlayer->Start();
-  LOGD("nOpen: success, sampleRate=%u", gSampleRate);
+  gPlayerType = PlayerType::LIBVGM;
+  gVgmPlayer->SetSampleRate(gSampleRate);
+  gVgmPlayer->Start();
+  LOGD("nOpen: libvgm success, sampleRate=%u", gSampleRate);
   return JNI_TRUE;
 }
 
@@ -205,47 +285,71 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nClose(JNIEnv *env, jclass cls) {
 
 JNIEXPORT void JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nPlay(JNIEnv *env, jclass cls) {
-  if (gPlayer) {
-    gPlayer->SetSampleRate(gSampleRate);
-    gPlayer->Start();
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    gVgmPlayer->SetSampleRate(gSampleRate);
+    gVgmPlayer->Start();
   }
+  // libgme doesn't have a separate play function - it plays via gme_play()
 }
 
 JNIEXPORT void JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nStop(JNIEnv *env, jclass cls) {
-  if (gPlayer)
-    gPlayer->Stop();
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    gVgmPlayer->Stop();
+  }
+  // libgme doesn't have a separate stop function
 }
 
 JNIEXPORT jboolean JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
-  if (!gPlayer)
-    return JNI_TRUE;
-  return (gPlayer->GetState() & PLAYSTATE_END) ? JNI_TRUE : JNI_FALSE;
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    return (gVgmPlayer->GetState() & PLAYSTATE_END) ? JNI_TRUE : JNI_FALSE;
+  }
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    return gme_track_ended(gGmePlayer) ? JNI_TRUE : JNI_FALSE;
+  }
+  return JNI_TRUE;
 }
 
 JNIEXPORT jlong JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
                                                          jclass cls) {
-  if (!gPlayer)
-    return 0;
-  return (jlong)gPlayer->Tick2Sample(gPlayer->GetTotalTicks());
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    return (jlong)gVgmPlayer->Tick2Sample(gVgmPlayer->GetTotalTicks());
+  }
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    gme_info_t *info;
+    if (gme_track_info(gGmePlayer, &info, gGmeTrackIndex) == 0) {
+      int length_ms = info->play_length;
+      gme_free_info(info);
+      return (jlong)(length_ms * gSampleRate / 1000);
+    }
+  }
+  return 0;
 }
 
 JNIEXPORT jlong JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
                                                           jclass cls) {
-  if (!gPlayer)
-    return 0;
-  return (jlong)gPlayer->Tick2Sample(gPlayer->GetCurPos(PLAYPOS_TICK));
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    return (jlong)gVgmPlayer->Tick2Sample(gVgmPlayer->GetCurPos(PLAYPOS_TICK));
+  }
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    int ms = gme_tell(gGmePlayer);
+    return (jlong)(ms * gSampleRate / 1000);
+  }
+  return 0;
 }
 
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
     JNIEnv *env, jclass cls, jlong samplePos) {
-  if (!gPlayer)
-    return;
-  // Seek via absolute sample position
-  gPlayer->Seek(PLAYPOS_SAMPLE, (UINT32)samplePos);
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    gVgmPlayer->Seek(PLAYPOS_SAMPLE, (UINT32)samplePos);
+  }
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    int ms = (int)(samplePos * 1000 / gSampleRate);
+    gme_seek(gGmePlayer, ms);
+  }
 }
 
 /**
@@ -255,47 +359,58 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
  */
 JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
     JNIEnv *env, jclass cls, jshortArray buffer, jint frames) {
-  if (!gPlayer || frames <= 0)
+  if (frames <= 0)
     return 0;
 
-  enum { MAX_FRAMES = 4096 };
-  static WAVE_32BS buf[MAX_FRAMES];
-
-  jint remaining = frames;
+  jshort *dst = (jshort *)env->GetShortArrayElements(buffer, nullptr);
   jint written = 0;
 
-  jshort *dst = (jshort *)env->GetShortArrayElements(buffer, nullptr);
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    enum { MAX_FRAMES = 4096 };
+    static WAVE_32BS buf[MAX_FRAMES];
 
-  while (remaining > 0) {
-    jint chunk = (remaining > MAX_FRAMES) ? MAX_FRAMES : remaining;
-    memset(buf, 0, chunk * sizeof(WAVE_32BS));
-    UINT32 got = gPlayer->Render((UINT32)chunk, buf);
-    if (got == 0) {
-      LOGD("nFillBuffer: Render returned 0");
-      break;
+    jint remaining = frames;
+
+    while (remaining > 0) {
+      jint chunk = (remaining > MAX_FRAMES) ? MAX_FRAMES : remaining;
+      memset(buf, 0, chunk * sizeof(WAVE_32BS));
+      UINT32 got = gVgmPlayer->Render((UINT32)chunk, buf);
+      if (got == 0) {
+        LOGD("nFillBuffer: Render returned 0");
+        break;
+      }
+
+      for (jint i = 0; i < (jint)got; i++) {
+        INT32 l = buf[i].L >> 8;
+        INT32 r = buf[i].R >> 8;
+        if (l > 32767) l = 32767;
+        if (l < -32768) l = -32768;
+        if (r > 32767) r = 32767;
+        if (r < -32768) r = -32768;
+        dst[(written + i) * 2] = (jshort)l;
+        dst[(written + i) * 2 + 1] = (jshort)r;
+
+        gFftRingBuffer[gFftWriteIdx] = (float)(l + r) / 65536.0f;
+        gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      }
+      written += (jint)got;
+      remaining -= (jint)got;
     }
-
-    for (jint i = 0; i < (jint)got; i++) {
-      // Convert 24-bit fixed-point to 16-bit
-      INT32 l = buf[i].L >> 8;
-      INT32 r = buf[i].R >> 8;
-      if (l > 32767)
-        l = 32767;
-      if (l < -32768)
-        l = -32768;
-      if (r > 32767)
-        r = 32767;
-      if (r < -32768)
-        r = -32768;
-      dst[(written + i) * 2] = (jshort)l;
-      dst[(written + i) * 2 + 1] = (jshort)r;
-
-      // Feed mono sample to FFT ring buffer
-      gFftRingBuffer[gFftWriteIdx] = (float)(l + r) / 65536.0f;
-      gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+  } else if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    // libgme outputs directly in 16-bit stereo interleaved format
+    gme_err_t err = gme_play(gGmePlayer, frames * 2, dst);
+    if (err) {
+      LOGE("gme_play error: %s", err);
+    } else {
+      written = frames;
+      
+      // Feed mono samples to FFT ring buffer
+      for (jint i = 0; i < written; i++) {
+        float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+        gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+        gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      }
     }
-    written += (jint)got;
-    remaining -= (jint)got;
   }
 
   env->ReleaseShortArrayElements(buffer, dst, 0);
@@ -303,10 +418,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
   // Occasional logging to avoid flooding
   static int logCounter = 0;
   if (logCounter++ % 100 == 0) {
-    LOGD("nFillBuffer: wrote %d frames", written);
-    if (written > 0) {
-      LOGD("nFillBuffer: samples[0] L=%d, R=%d", dst[0], dst[1]);
-    }
+    LOGD("nFillBuffer: wrote %d frames, playerType=%d", written, (int)gPlayerType);
   }
 
   return written;
@@ -317,16 +429,13 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
   int n = FFT_SIZE;
   std::vector<Complex> a(n);
 
-  // Read from ring buffer (start from current writeIdx to get latest)
   for (int i = 0; i < n; i++) {
     a[i] = Complex(gFftRingBuffer[(gFftWriteIdx + i) % n], 0.0f);
   }
 
-  // Apply Hanning window
   for (int i = 0; i < n; i++) {
     float multiplier =
-        0.5f *
-        (1.0f - std::cos(2.0f * 3.14159265f * (float)i / (float)(n - 1)));
+        0.5f * (1.0f - std::cos(2.0f * 3.14159265f * (float)i / (float)(n - 1)));
     a[i] *= multiplier;
   }
 
@@ -344,7 +453,6 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
       maxMag = dst[i];
   }
 
-  // Normalize to 0-255 range for better visualization
   if (maxMag > 0.0f) {
     float scale = 255.0f / maxMag;
     for (int i = 0; i < outSize; i++) {
@@ -361,24 +469,102 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
  */
 JNIEXPORT jstring JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
-  if (!gPlayer)
-    return env->NewStringUTF("");
-  const char *const *t = gPlayer->GetTags();
-  if (!t)
-    return env->NewStringUTF("");
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    const char *const *t = gVgmPlayer->GetTags();
+    if (!t)
+      return env->NewStringUTF("");
 
-  std::string s;
-  while (*t) {
-    s += *t;
-    s += "|||";
-    ++t;
+    std::string s;
+    while (*t) {
+      s += *t;
+      s += "|||";
+      ++t;
+    }
+    return env->NewStringUTF(s.c_str());
   }
-  return env->NewStringUTF(s.c_str());
+  
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    gme_info_t *info;
+    if (gme_track_info(gGmePlayer, &info, gGmeTrackIndex) != 0) {
+      return env->NewStringUTF("");
+    }
+    
+    // Build tags string in similar format to VGM
+    std::string s;
+    
+    // TITLE
+    s += "TITLE";
+    s += "|||";
+    s += info->song ? info->song : "";
+    s += "|||";
+    
+    // TITLE-JPN (not available in gme)
+    s += "TITLE-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // GAME
+    s += "GAME";
+    s += "|||";
+    s += info->game ? info->game : "";
+    s += "|||";
+    
+    // GAME-JPN
+    s += "GAME-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // SYSTEM
+    s += "SYSTEM";
+    s += "|||";
+    s += info->system ? info->system : "";
+    s += "|||";
+    
+    // SYSTEM-JPN
+    s += "SYSTEM-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // ARTIST
+    s += "ARTIST";
+    s += "|||";
+    s += info->author ? info->author : "";
+    s += "|||";
+    
+    // ARTIST-JPN
+    s += "ARTIST-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // DATE
+    s += "DATE";
+    s += "|||";
+    s += info->copyright ? info->copyright : "";
+    s += "|||";
+    
+    // ENCODED_BY (dumper)
+    s += "ENCODED_BY";
+    s += "|||";
+    s += info->dumper ? info->dumper : "";
+    s += "|||";
+    
+    // COMMENT
+    s += "COMMENT";
+    s += "|||";
+    s += info->comment ? info->comment : "";
+    s += "|||";
+    
+    gme_free_info(info);
+    return env->NewStringUTF(s.c_str());
+  }
+  
+  return env->NewStringUTF("");
 }
 
 /**
  * Scan a VGM file to get its length in samples without loading it as the active
- * track.
+ * track. For multi-track files (NSF), returns length for track 0.
+ * Use nGetTrackLength for specific track index.
  */
 JNIEXPORT jlong JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
@@ -386,6 +572,40 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
                                                               jstring jpath) {
   const char *path = env->GetStringUTFChars(jpath, nullptr);
 
+  // Check if this is a libgme format
+  if (isGmeFormat(path)) {
+    Music_Emu *tempEmu;
+    gme_err_t err = gme_open_file(path, &tempEmu, gSampleRate);
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    if (err || !tempEmu) {
+      return 0;
+    }
+    
+    gme_info_t *info;
+    if (gme_track_info(tempEmu, &info, 0) != 0) {
+      gme_delete(tempEmu);
+      return 0;
+    }
+    
+    // For NSF files, play_length is usually a default (often 2-3 minutes)
+    // intro_length + loop_length gives more accurate estimate if available
+    int length_ms = info->play_length;
+    if (info->intro_length > 0 && info->loop_length > 0) {
+      // Use intro + 2 loops for better estimate
+      length_ms = info->intro_length + info->loop_length * 2;
+    } else if (length_ms <= 0) {
+      // Default to 3 minutes if no length info
+      length_ms = 180000;
+    }
+    
+    gme_free_info(info);
+    gme_delete(tempEmu);
+    
+    return (jlong)(length_ms * gSampleRate / 1000);
+  }
+
+  // Use libvgm for VGM/VGZ
   DATA_LOADER *locLoader = FileLoader_Init(path);
   env->ReleaseStringUTFChars(jpath, path);
 
@@ -413,23 +633,27 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
 
 JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceCount(
     JNIEnv *env, jclass cls) {
-  if (!gPlayer)
-    return 0;
-  std::vector<PLR_DEV_INFO> devs;
-  if (gPlayer->GetSongDeviceInfo(devs) <= 0x01) {
-    std::vector<UINT32> ids;
-    for (auto &d : devs) {
-      bool found = false;
-      for (auto e : ids) {
-        if (e == d.id) {
-          found = true;
-          break;
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    std::vector<PLR_DEV_INFO> devs;
+    if (gVgmPlayer->GetSongDeviceInfo(devs) <= 0x01) {
+      std::vector<UINT32> ids;
+      for (auto &d : devs) {
+        bool found = false;
+        for (auto e : ids) {
+          if (e == d.id) {
+            found = true;
+            break;
+          }
         }
+        if (!found)
+          ids.push_back(d.id);
       }
-      if (!found)
-        ids.push_back(d.id);
+      return (jint)ids.size();
     }
-    return (jint)ids.size();
+  }
+  // libgme doesn't expose device info in the same way
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    return gme_voice_count(gGmePlayer);
   }
   return 0;
 }
@@ -437,31 +661,35 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceCount(
 JNIEXPORT jstring JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceName(JNIEnv *env, jclass cls,
                                                        jint id) {
-  if (!gPlayer)
-    return env->NewStringUTF("");
-  std::vector<PLR_DEV_INFO> devs;
-  if (gPlayer->GetSongDeviceInfo(devs) <= 0x01) {
-    for (size_t i = 0; i < devs.size(); i++) {
-      if (devs[i].id == (UINT32)id) {
-        const char *name = (devs[i].devDecl && devs[i].devDecl->name)
-                               ? devs[i].devDecl->name(devs[i].devCfg)
-                               : "Unknown";
-        return env->NewStringUTF(name ? name : "Unknown");
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    std::vector<PLR_DEV_INFO> devs;
+    if (gVgmPlayer->GetSongDeviceInfo(devs) <= 0x01) {
+      for (size_t i = 0; i < devs.size(); i++) {
+        if (devs[i].id == (UINT32)id) {
+          const char *name = (devs[i].devDecl && devs[i].devDecl->name)
+                                 ? devs[i].devDecl->name(devs[i].devCfg)
+                                 : "Unknown";
+          return env->NewStringUTF(name ? name : "Unknown");
+        }
       }
     }
+  }
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    const char *name = gme_voice_name(gGmePlayer, id);
+    return env->NewStringUTF(name ? name : "Unknown");
   }
   return env->NewStringUTF("");
 }
 
 JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceVolume(
     JNIEnv *env, jclass cls, jint id) {
-  if (!gPlayer)
-    return 0x100;
-  std::vector<PLR_DEV_INFO> devs;
-  if (gPlayer->GetSongDeviceInfo(devs) <= 0x01) {
-    for (size_t i = 0; i < devs.size(); i++) {
-      if (devs[i].id == (UINT32)id)
-        return (jint)devs[i].volume;
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    std::vector<PLR_DEV_INFO> devs;
+    if (gVgmPlayer->GetSongDeviceInfo(devs) <= 0x01) {
+      for (size_t i = 0; i < devs.size(); i++) {
+        if (devs[i].id == (UINT32)id)
+          return (jint)devs[i].volume;
+      }
     }
   }
   return 0x100;
@@ -469,8 +697,52 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceVolume(
 
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetDeviceVolume(
     JNIEnv *env, jclass cls, jint id, jint vol) {
-  if (gPlayer)
-    gPlayer->SetDeviceVolume(id, (UINT32)vol);
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    gVgmPlayer->SetDeviceVolume(id, (UINT32)vol);
+  }
+  // libgme doesn't support per-device volume
+}
+
+// libgme-specific: get track count for multi-track files (NSF, GBS, etc.)
+JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackCount(
+    JNIEnv *env, jclass cls) {
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    return gGmeTrackCount;
+  }
+  // VGM files typically have 1 track
+  return 1;
+}
+
+// libgme-specific: set current track index
+JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetTrack(
+    JNIEnv *env, jclass cls, jint trackIndex) {
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    if (trackIndex >= 0 && trackIndex < gGmeTrackCount) {
+      gme_err_t err = gme_start_track(gGmePlayer, trackIndex);
+      if (err) {
+        LOGE("gme_start_track(%d) failed: %s", trackIndex, err);
+        return JNI_FALSE;
+      }
+      gGmeTrackIndex = trackIndex;
+      return JNI_TRUE;
+    }
+  }
+  return JNI_FALSE;
+}
+
+// libgme-specific: get current track index
+JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentTrack(
+    JNIEnv *env, jclass cls) {
+  return gGmeTrackIndex;
+}
+
+// Check if file is a multi-track format (NSF, GBS, etc.)
+JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nIsMultiTrack(
+    JNIEnv *env, jclass cls, jstring jpath) {
+  const char *path = env->GetStringUTFChars(jpath, nullptr);
+  bool result = isGmeFormat(path);
+  env->ReleaseStringUTFChars(jpath, path);
+  return result ? JNI_TRUE : JNI_FALSE;
 }
 
 } // extern "C"

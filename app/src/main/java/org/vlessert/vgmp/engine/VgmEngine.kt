@@ -49,6 +49,12 @@ object VgmEngine {
     @JvmStatic external fun nGetDeviceVolume(id: Int): Int
     @JvmStatic external fun nSetDeviceVolume(id: Int, vol: Int)
 
+    // libgme multi-track support (NSF, GBS, etc.)
+    @JvmStatic external fun nGetTrackCount(): Int
+    @JvmStatic external fun nSetTrack(trackIndex: Int): Boolean
+    @JvmStatic external fun nGetCurrentTrack(): Int
+    @JvmStatic external fun nIsMultiTrack(path: String): Boolean
+
     // ----- Thread-safe wrappers -----
 
     suspend fun setSampleRate(rate: Int) = mutex.withLock { nSetSampleRate(rate) }
@@ -69,6 +75,12 @@ object VgmEngine {
     suspend fun getDeviceName(id: Int): String = mutex.withLock { nGetDeviceName(id) }
     suspend fun getDeviceVolume(id: Int): Int = mutex.withLock { nGetDeviceVolume(id) }
     suspend fun setDeviceVolume(id: Int, vol: Int) = mutex.withLock { nSetDeviceVolume(id, vol) }
+    
+    // Multi-track support (NSF, GBS, etc.)
+    suspend fun getTrackCount(): Int = mutex.withLock { nGetTrackCount() }
+    suspend fun setTrack(trackIndex: Int): Boolean = mutex.withLock { nSetTrack(trackIndex) }
+    suspend fun getCurrentTrack(): Int = mutex.withLock { nGetCurrentTrack() }
+    suspend fun isMultiTrack(path: String): Boolean = mutex.withLock { nIsMultiTrack(path) }
 
     /**
      * Parse the raw tag string returned by [nGetTags] into a [VgmTags] object.

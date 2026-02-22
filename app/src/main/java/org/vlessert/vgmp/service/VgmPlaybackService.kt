@@ -337,6 +337,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             Log.e(TAG, "Failed to open ${track.filePath}")
             return
         }
+        
+        // For multi-track files (NSF, GBS, etc.), switch to the correct sub-track
+        if (track.subTrackIndex >= 0) {
+            val switched = VgmEngine.setTrack(track.subTrackIndex)
+            if (!switched) {
+                Log.e(TAG, "Failed to set sub-track ${track.subTrackIndex}")
+            }
+        }
 
         // Parse tags
         currentTags = VgmEngine.parseTags(VgmEngine.getTags())

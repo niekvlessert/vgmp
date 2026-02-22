@@ -62,7 +62,7 @@ class LibraryFragment : Fragment() {
                     performSearch(binding.searchInput.text?.toString() ?: "")
                 }
             },
-            getCurrentlyPlayingTrackPath = { service?.currentTrack?.filePath }
+            getCurrentlyPlayingTrack = { service?.currentTrack }
         )
         val layoutManager = LinearLayoutManager(requireContext())
         binding.recyclerGames.layoutManager = layoutManager
@@ -175,7 +175,7 @@ class LibraryFragment : Fragment() {
 class GameAdapter(
     private val onTrackClick: (game: Game, track: TrackEntity, gameIdx: Int, trackIdx: Int) -> Unit,
     private val onFavoriteClick: (game: Game) -> Unit,
-    private val getCurrentlyPlayingTrackPath: () -> String?
+    private val getCurrentlyPlayingTrack: () -> TrackEntity?
 ) : RecyclerView.Adapter<GameAdapter.GameViewHolder>() {
 
     private var games: List<Game> = emptyList()
@@ -200,7 +200,7 @@ class GameAdapter(
     override fun onBindViewHolder(holder: GameViewHolder, position: Int) {
         val game = games[position]
         val globalIdx = allServiceGames.indexOfFirst { it.id == game.id }
-        holder.bind(game, globalIdx, expandedGames.contains(game.id), getCurrentlyPlayingTrackPath())
+        holder.bind(game, globalIdx, expandedGames.contains(game.id), getCurrentlyPlayingTrack())
         holder.itemView.setOnClickListener {
             if (expandedGames.contains(game.id)) expandedGames.remove(game.id)
             else expandedGames.add(game.id)
@@ -225,7 +225,7 @@ class GameAdapter(
 
         fun setTrackClickListener(l: (TrackEntity, Int) -> Unit) { trackClickListener = l }
 
-        fun bind(game: Game, globalIdx: Int, expanded: Boolean, nowPlayingPath: String?) {
+        fun bind(game: Game, globalIdx: Int, expanded: Boolean, nowPlayingTrack: TrackEntity?) {
             nameView.text = game.name
             systemView.text = game.system
             btnFavorite.setImageResource(
@@ -253,7 +253,16 @@ class GameAdapter(
                     val tvTitle = trackView.findViewById<TextView>(R.id.tv_track_title)
                     val tvDuration = trackView.findViewById<TextView>(R.id.tv_track_duration)
                     val ivFavorite = trackView.findViewById<ImageView>(R.id.iv_track_favorite)
-                    val isActive = track.filePath == nowPlayingPath
+                    
+                    // For multi-track files, compare both filePath and subTrackIndex
+                    val isActive = if (track.subTrackIndex >= 0) {
+                        nowPlayingTrack != null && 
+                        nowPlayingTrack.filePath == track.filePath && 
+                        nowPlayingTrack.subTrackIndex == track.subTrackIndex
+                    } else {
+                        nowPlayingTrack?.filePath == track.filePath
+                    }
+                    
                     tvTitle.text = track.title
                     tvTitle.isSelected = isActive
                     // Show favorite star if track is favorite
