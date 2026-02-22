@@ -1,27 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout
+<androidx.core.widget.NestedScrollView
     xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/content_scroll"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
-
-    <!-- Kaleidoscope background -->
-    <org.vlessert.vgmp.ui.KaleidoscopeView
-        android:id="@+id/kaleidoscope_view"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <androidx.core.widget.NestedScrollView
-        android:id="@+id/content_scroll"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:fillViewport="true">
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="@color/vgmp_background">
 
         <LinearLayout
             android:id="@+id/content_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:background="#CC000000"
             android:padding="16dp">
 
             <!-- Drag handle -->
@@ -248,5 +238,4 @@
                 android:layout_marginTop="8dp" />
 
         </LinearLayout>
-    </androidx.core.widget.NestedScrollView>
-</FrameLayout>
+</androidx.core.widget.NestedScrollView>

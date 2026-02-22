@@ -1,35 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.coordinatorlayout.widget.CoordinatorLayout
+<FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/vgmp_background">
 
-    <!-- Toolbar -->
-    <androidx.appcompat.widget.Toolbar
-        android:id="@+id/toolbar"
-        android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
-        android:background="@color/vgmp_background"
-        android:elevation="4dp"
-        app:title="@string/app_name"
-        app:titleTextColor="@color/vgmp_accent" />
-
-    <!-- Main fragment container (fills space between toolbar and mini player) -->
-    <FrameLayout
-        android:id="@+id/fragment_container"
+    <!-- Fullscreen Kaleidoscope Background -->
+    <org.vlessert.vgmp.ui.KaleidoscopeView
+        android:id="@+id/kaleidoscopeView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginTop="?attr/actionBarSize"
-        android:layout_marginBottom="72dp" />
+        android:visibility="gone" />
 
-    <!-- Persistent mini player at the bottom -->
-    <include
-        android:id="@+id/mini_player"
-        layout="@layout/layout_mini_player"
+    <androidx.coordinatorlayout.widget.CoordinatorLayout
+        android:id="@+id/main_content"
         android:layout_width="match_parent"
-        android:layout_height="72dp"
-        android:layout_gravity="bottom" />
+        android:layout_height="match_parent">
 
-</androidx.coordinatorlayout.widget.CoordinatorLayout>
+        <!-- Toolbar -->
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="@color/vgmp_background"
+            android:elevation="4dp"
+            app:title="@string/app_name"
+            app:titleTextColor="@color/vgmp_accent" />
+
+        <!-- Main fragment container (fills space between toolbar and mini player) -->
+        <FrameLayout
+            android:id="@+id/fragment_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_marginTop="?attr/actionBarSize"
+            android:layout_marginBottom="72dp" />
+
+        <!-- Persistent mini player at the bottom -->
+        <include
+            android:id="@+id/mini_player"
+            layout="@layout/layout_mini_player"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:layout_gravity="bottom" />
+
+    </androidx.coordinatorlayout.widget.CoordinatorLayout>
+
+</FrameLayout>

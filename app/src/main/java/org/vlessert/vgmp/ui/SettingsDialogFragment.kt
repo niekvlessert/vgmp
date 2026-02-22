@@ -6,6 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.SeekBar
 import androidx.fragment.app.DialogFragment
+import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentSettingsBinding
 import org.vlessert.vgmp.settings.SettingsManager
@@ -31,7 +32,10 @@ class SettingsDialogFragment : DialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        binding.toolbar.setNavigationOnClickListener { dismissAllowingStateLoss() }
+        binding.toolbar.setNavigationOnClickListener { 
+            (activity as? MainActivity)?.resetAutoHideTimer()
+            dismissAllowingStateLoss() 
+        }
         
         loadSettings()
         setupListeners()
@@ -42,11 +46,6 @@ class SettingsDialogFragment : DialogFragment() {
         
         // Analyzer enabled
         binding.switchAnalyzerEnabled.isChecked = SettingsManager.isAnalyzerEnabled(context)
-        
-        // Transparency level
-        val transparency = SettingsManager.getTransparencyLevel(context)
-        binding.seekbarTransparency.progress = transparency
-        binding.tvTransparencyValue.text = "$transparency%"
         
         // Fade timeout
         val fadeTimeout = SettingsManager.getFadeTimeout(context)
@@ -61,17 +60,6 @@ class SettingsDialogFragment : DialogFragment() {
             SettingsManager.setAnalyzerEnabled(context, isChecked)
         }
         
-        binding.seekbarTransparency.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                binding.tvTransparencyValue.text = "$progress%"
-                if (fromUser) {
-                    SettingsManager.setTransparencyLevel(context, progress)
-                }
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-        
         binding.seekbarFadeTimeout.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 binding.tvFadeTimeoutValue.text = "${progress}s"
@@ -85,6 +73,7 @@ class SettingsDialogFragment : DialogFragment() {
     }
 
     override fun onDestroyView() {
+        (activity as? MainActivity)?.resetAutoHideTimer()
         super.onDestroyView()
         _binding = null
     }

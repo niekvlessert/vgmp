@@ -46,7 +46,10 @@ class VgmRipsSearchFragment : DialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        binding.toolbar.setNavigationOnClickListener { dismissAllowingStateLoss() }
+        binding.toolbar.setNavigationOnClickListener { 
+            (activity as? MainActivity)?.resetAutoHideTimer()
+            dismissAllowingStateLoss() 
+        }
         
         binding.btnSearch.setOnClickListener {
             val query = binding.searchInput.text?.toString() ?: ""
@@ -191,6 +194,7 @@ class VgmRipsSearchFragment : DialogFragment() {
     }
 
     override fun onDestroyView() {
+        (activity as? MainActivity)?.resetAutoHideTimer()
         super.onDestroyView()
         _binding = null
     }

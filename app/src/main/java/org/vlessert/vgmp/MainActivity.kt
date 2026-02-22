@@ -7,9 +7,16 @@ import android.content.IntentFilter
 import android.content.ComponentName
 import android.content.ServiceConnection
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Menu
 import android.view.MenuItem
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import android.Manifest
@@ -17,18 +24,27 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.vlessert.vgmp.databinding.ActivityMainBinding
 import org.vlessert.vgmp.service.VgmPlaybackService
 import org.vlessert.vgmp.ui.LibraryFragment
 import org.vlessert.vgmp.ui.NowPlayingFragment
+import org.vlessert.vgmp.settings.SettingsManager
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private var playbackService: VgmPlaybackService? = null
     private var serviceBound = false
+    private var isKaleidoscopeVisible = false
+    
+    // Auto-hide for main screen
+    private var lastInteractionTime = System.currentTimeMillis()
+    private val autoHideHandler = Handler(Looper.getMainLooper())
+    private var autoHideRunnable: Runnable? = null
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -45,6 +61,9 @@ class MainActivity : AppCompatActivity() {
                 .forEach { it.onServiceConnected(playbackService!!) }
             supportFragmentManager.fragments.filterIsInstance<NowPlayingFragment>()
                 .forEach { it.onServiceConnected(playbackService!!) }
+            
+            // Start observing spectrum for kaleidoscope
+            startSpectrumObserver()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -79,6 +98,173 @@ class MainActivity : AppCompatActivity() {
         binding.miniPlayer.btnMiniNext.setOnClickListener {
             playbackService?.nextTrack()
         }
+        
+        // Setup kaleidoscope touch listener
+        binding.kaleidoscopeView.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                if (isKaleidoscopeVisible) {
+                    hideKaleidoscope()
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+        
+        // Setup auto-hide for main screen
+        setupMainAutoHide()
+    }
+    
+    private fun setupMainAutoHide() {
+        // Track touches on main content
+        binding.mainContent.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                lastInteractionTime = System.currentTimeMillis()
+                if (isKaleidoscopeVisible) {
+                    hideKaleidoscope()
+                }
+            }
+            false
+        }
+        binding.mainContent.isClickable = true
+        
+        // Start auto-hide check
+        autoHideRunnable = object : Runnable {
+            override fun run() {
+                val timeout = SettingsManager.getFadeTimeout(this@MainActivity) * 1000L
+                val isPlayerOpen = supportFragmentManager.findFragmentByTag("now_playing")?.isVisible == true
+                val isSettingsOpen = supportFragmentManager.findFragmentByTag("settings")?.isVisible == true
+                val isDownloadOpen = supportFragmentManager.findFragmentByTag("download")?.isVisible == true
+                val isVgmRipsOpen = supportFragmentManager.findFragmentByTag("vgmrips_search")?.isVisible == true
+                val isPlaying = playbackService?.playing == true
+                
+                // Only trigger kaleidoscope if:
+                // - Timeout is set (> 0)
+                // - Kaleidoscope not already visible
+                // - No dialogs are open (player, settings, download, vgmrips)
+                // - Music is actually playing
+                // - Inactivity timeout reached
+                val anyDialogOpen = isPlayerOpen || isSettingsOpen || isDownloadOpen || isVgmRipsOpen
+                if (timeout > 0 && !isKaleidoscopeVisible && !anyDialogOpen && isPlaying && System.currentTimeMillis() - lastInteractionTime >= timeout) {
+                    showKaleidoscope()
+                }
+                autoHideHandler.postDelayed(this, 1000)
+            }
+        }
+        autoHideHandler.postDelayed(autoHideRunnable!!, 1000)
+    }
+    
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        lastInteractionTime = System.currentTimeMillis()
+    }
+    
+    private fun startSpectrumObserver() {
+        val svc = playbackService ?: return
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                svc.spectrum.collect { magnitudes ->
+                    if (isKaleidoscopeVisible) {
+                        // Hide kaleidoscope if music stopped
+                        if (!svc.playing) {
+                            hideKaleidoscope()
+                        } else {
+                            binding.kaleidoscopeView.updateFFT(magnitudes)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    fun showKaleidoscope() {
+        // Only show if enabled and music is playing
+        if (!SettingsManager.isAnalyzerEnabled(this)) return
+        if (playbackService?.playing != true) return
+        
+        isKaleidoscopeVisible = true
+        
+        // Dismiss any open bottom sheet (NowPlayingFragment)
+        supportFragmentManager.findFragmentByTag("now_playing")?.let { fragment ->
+            (fragment as? NowPlayingFragment)?.dismiss()
+        }
+        
+        // Hide system UI for true fullscreen
+        hideSystemUI()
+        
+        binding.kaleidoscopeView.visibility = View.VISIBLE
+        binding.kaleidoscopeView.alpha = 0f
+        binding.kaleidoscopeView.animate()
+            .alpha(1f)
+            .setDuration(500)
+            .start()
+        // Hide main content
+        binding.mainContent.animate()
+            .alpha(0f)
+            .setDuration(500)
+            .withEndAction {
+                binding.mainContent.visibility = View.GONE
+            }
+            .start()
+    }
+    
+    fun hideKaleidoscope() {
+        if (!isKaleidoscopeVisible) return
+        isKaleidoscopeVisible = false
+        
+        // Restore system UI
+        showSystemUI()
+        
+        lastInteractionTime = System.currentTimeMillis()
+        binding.mainContent.visibility = View.VISIBLE
+        binding.mainContent.alpha = 0f
+        binding.mainContent.animate()
+            .alpha(1f)
+            .setDuration(500)
+            .start()
+        binding.kaleidoscopeView.animate()
+            .alpha(0f)
+            .setDuration(500)
+            .withEndAction {
+                binding.kaleidoscopeView.visibility = View.GONE
+            }
+            .start()
+    }
+    
+    private fun hideSystemUI() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.let { controller ->
+                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE
+                or View.SYSTEM_UI_FLAG_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            )
+        }
+    }
+    
+    private fun showSystemUI() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        }
+    }
+    
+    fun isKaleidoscopeShowing() = isKaleidoscopeVisible
+    
+    fun resetAutoHideTimer() {
+        lastInteractionTime = System.currentTimeMillis()
     }
 
     private fun requestPermissionsIfNeeded() {

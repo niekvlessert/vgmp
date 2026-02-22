@@ -344,6 +344,14 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
       maxMag = dst[i];
   }
 
+  // Normalize to 0-255 range for better visualization
+  if (maxMag > 0.0f) {
+    float scale = 255.0f / maxMag;
+    for (int i = 0; i < outSize; i++) {
+      dst[i] = dst[i] * scale;
+    }
+  }
+
   env->ReleaseFloatArrayElements(outMagnitudes, dst, 0);
 }
 

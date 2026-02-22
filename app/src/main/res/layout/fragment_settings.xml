@@ -66,48 +66,6 @@
                 android:layout_height="1dp"
                 android:background="@color/vgmp_divider" />
 
-            <!-- Transparency Level -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="Transparency Level"
-                android:textColor="@color/vgmp_text_primary"
-                android:textSize="16sp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginTop="8dp">
-
-                <SeekBar
-                    android:id="@+id/seekbar_transparency"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:max="100"
-                    android:progressTint="@color/vgmp_accent"
-                    android:thumbTint="@color/vgmp_accent" />
-
-                <TextView
-                    android:id="@+id/tv_transparency_value"
-                    android:layout_width="50dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:text="80%"
-                    android:textColor="@color/vgmp_text_secondary"
-                    android:textSize="14sp"
-                    android:gravity="end" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="@color/vgmp_divider"
-                android:layout_marginTop="16dp" />
-
             <!-- Fade Timeout -->
             <TextView
                 android:layout_width="match_parent"
@@ -120,7 +78,7 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Menu fades to show kaleidoscope after inactivity"
+                android:text="Player hides after inactivity, showing kaleidoscope"
                 android:textColor="@color/vgmp_text_secondary"
                 android:textSize="12sp"
                 android:layout_marginTop="4dp" />

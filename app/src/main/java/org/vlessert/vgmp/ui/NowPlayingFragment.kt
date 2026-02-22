@@ -10,15 +10,11 @@ import android.view.ViewGroup
 import android.widget.SeekBar
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
-import androidx.lifecycle.Lifecycle
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentNowPlayingBinding
 import org.vlessert.vgmp.engine.VgmEngine
-import org.vlessert.vgmp.engine.VgmTags
 import org.vlessert.vgmp.library.GameLibrary
 import org.vlessert.vgmp.service.VgmPlaybackService
 import java.io.File
@@ -49,7 +45,6 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         updateUI()
         startPositionUpdater()
         observePlaybackInfo()
-        startSpectrumObserver()
     }
 
     fun onServiceConnected(svc: VgmPlaybackService) {
@@ -172,18 +167,6 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         updateModeButtons()
     }
 
-    private fun startSpectrumObserver() {
-        val binding = _binding ?: return
-        val svc = service ?: return
-        viewLifecycleOwner.lifecycleScope.launch {
-            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                svc.spectrum.collect { magnitudes ->
-                    binding.kaleidoscopeView.updateFFT(magnitudes)
-                }
-            }
-        }
-    }
-
     private fun updateModeButtons() {
         val binding = _binding ?: return
         val svc = service ?: return
@@ -300,6 +283,7 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
 
     override fun onDestroyView() {
         handler.removeCallbacksAndMessages(null)
+        (activity as? org.vlessert.vgmp.MainActivity)?.resetAutoHideTimer()
         super.onDestroyView()
         _binding = null
     }

@@ -9,6 +9,7 @@ import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkManager
 import kotlinx.coroutines.launch
+import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.download.DownloadSources
 import org.vlessert.vgmp.download.DownloadWorker
@@ -35,7 +36,10 @@ class DownloadDialogFragment : DialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        binding.toolbar.setNavigationOnClickListener { dismissAllowingStateLoss() }
+        binding.toolbar.setNavigationOnClickListener { 
+            (activity as? MainActivity)?.resetAutoHideTimer()
+            dismissAllowingStateLoss() 
+        }
         
         // Add VGM Rips search button
         binding.btnVgmripsSearch.setOnClickListener {
@@ -98,6 +102,7 @@ class DownloadDialogFragment : DialogFragment() {
     }
 
     override fun onDestroyView() {
+        (activity as? MainActivity)?.resetAutoHideTimer()
         super.onDestroyView()
         _binding = null
     }

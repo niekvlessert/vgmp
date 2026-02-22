@@ -17,6 +17,11 @@ class KaleidoscopeView @JvmOverloads constructor(
     }
     private var path = Path()
     
+    init {
+        // Make the view clickable to receive touch events
+        isClickable = true
+    }
+    
     // Smoothing
     private val smoothingFactor = 0.7f
     private var smoothedMagnitudes: FloatArray? = null
