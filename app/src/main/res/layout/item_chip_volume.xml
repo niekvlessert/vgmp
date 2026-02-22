@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingVertical="8dp">
+
+    <TextView
+        android:id="@+id/tv_chip_name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@color/vgmp_text_primary"
+        android:textSize="12sp"
+        android:text="YM2612" />
+
+    <SeekBar
+        android:id="@+id/sb_chip_volume"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="512"
+        android:progress="256"
+        android:progressTint="@color/vgmp_accent"
+        android:thumbTint="@color/vgmp_accent"
+        android:paddingStart="0dp"
+        android:paddingEnd="0dp" />
+</LinearLayout>

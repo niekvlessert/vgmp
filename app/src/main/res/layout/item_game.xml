@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/vgmp_surface"
+    android:layout_marginHorizontal="8dp"
+    android:layout_marginVertical="4dp"
+    android:paddingBottom="4dp">
+
+    <!-- Game header row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="10dp"
+        android:gravity="center_vertical">
+
+        <!-- Album art -->
+        <ImageView
+            android:id="@+id/iv_art"
+            android:layout_width="60dp"
+            android:layout_height="60dp"
+            android:scaleType="centerCrop"
+            android:src="@drawable/ic_album_placeholder"
+            android:contentDescription="Album art" />
+
+        <!-- Game info -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="12dp">
+
+            <TextView
+                android:id="@+id/tv_game_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/vgmp_text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:maxLines="2"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/tv_system"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/vgmp_accent"
+                android:textSize="12sp"
+                android:maxLines="1"
+                android:ellipsize="end" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/btn_favorite"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_gravity="top"
+            android:scaleType="fitCenter"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_star_border"
+            android:tint="@color/vgmp_accent"
+            android:contentDescription="Toggle favorite" />
+    </LinearLayout>
+
+    <!-- Tracks container (shown when expanded) -->
+    <LinearLayout
+        android:id="@+id/tracks_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone" />
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/vgmp_divider"
+        android:layout_marginHorizontal="4dp" />
+
+</LinearLayout>

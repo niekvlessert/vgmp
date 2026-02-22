@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/vgmp_background">
+
+    <!-- Search bar row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:gravity="center_vertical">
+
+        <EditText
+            android:id="@+id/search_input"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:hint="@string/search_hint"
+            android:textColor="@color/vgmp_text_primary"
+            android:textColorHint="@color/vgmp_text_secondary"
+            android:inputType="text"
+            android:background="@drawable/search_bg"
+            android:paddingStart="16dp"
+            android:paddingEnd="12dp"
+            android:imeOptions="actionSearch"
+            android:singleLine="true" />
+
+    </LinearLayout>
+
+    <!-- Progress bar (while searching) -->
+    <ProgressBar
+        android:id="@+id/progress_bar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="2dp"
+        android:indeterminate="true"
+        android:progressTint="@color/vgmp_accent"
+        android:indeterminateTint="@color/vgmp_accent"
+        android:visibility="gone" />
+
+    <!-- Empty state label -->
+    <TextView
+        android:id="@+id/empty_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/empty_library"
+        android:textColor="@color/vgmp_text_secondary"
+        android:gravity="center"
+        android:padding="24dp"
+        android:visibility="gone" />
+
+    <!-- Game list -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recycler_games"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingBottom="8dp" />
+
+</LinearLayout>

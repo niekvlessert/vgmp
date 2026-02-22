@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- VGMP dark theme palette -->
+    <color name="vgmp_background">#FF1a1a1a</color>
+    <color name="vgmp_surface">#FF2a2a2a</color>
+    <color name="vgmp_surface_variant">#FF333333</color>
+    <color name="vgmp_accent">#FF00ff66</color>
+    <color name="vgmp_accent_dim">#8800ff66</color>
+    <color name="vgmp_text_primary">#FFEEEEEE</color>
+    <color name="vgmp_text_secondary">#FF888888</color>
+    <color name="vgmp_divider">#FF3a3a3a</color>
+    <color name="vgmp_track_active_bg">#FF1a3a2a</color>
+    <color name="vgmp_transparent">#00000000</color>
+    <!-- Material3 color slots -->
+    <color name="colorPrimary">#FF00ff66</color>
+    <color name="colorPrimaryDark">#FF00aa44</color>
+    <color name="colorAccent">#FF00ff66</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Night mode: same dark theme (app is always dark) -->
+    <style name="Base.Theme.VGMP" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/vgmp_accent</item>
+        <item name="colorOnPrimary">@color/vgmp_background</item>
+        <item name="colorPrimaryContainer">@color/vgmp_surface</item>
+        <item name="colorSecondary">@color/vgmp_accent</item>
+        <item name="colorSurface">@color/vgmp_surface</item>
+        <item name="colorSurfaceVariant">@color/vgmp_surface_variant</item>
+        <item name="android:colorBackground">@color/vgmp_background</item>
+        <item name="android:statusBarColor">@color/vgmp_background</item>
+        <item name="android:navigationBarColor">@color/vgmp_background</item>
+        <item name="colorControlActivated">@color/vgmp_accent</item>
+        <item name="colorControlHighlight">@color/vgmp_accent_dim</item>
+        <item name="toolbarStyle">@style/VGMP.Toolbar</item>
+    </style>
+
+    <style name="Theme.VGMP" parent="Base.Theme.VGMP" />
+
+    <style name="VGMP.Toolbar" parent="Widget.AppCompat.Toolbar">
+        <item name="android:background">@color/vgmp_background</item>
+        <item name="titleTextColor">@color/vgmp_accent</item>
+        <item name="subtitleTextColor">@color/vgmp_text_secondary</item>
+    </style>
+
+    <style name="BottomSheetStyle" parent="Theme.Material3.Dark.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/VGMP.BottomSheet</item>
+        <item name="android:colorBackground">@color/vgmp_surface</item>
+    </style>
+
+    <style name="VGMP.BottomSheet" parent="Widget.Material3.BottomSheet">
+        <item name="backgroundTint">@color/vgmp_surface</item>
+    </style>
+
+    <style name="VGMP.Button.Green" parent="Widget.Material3.Button">
+        <item name="android:backgroundTint">@color/vgmp_accent</item>
+        <item name="android:textColor">@color/vgmp_background</item>
+    </style>
+
+    <style name="FullScreenDialogStyle" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:colorBackground">@color/vgmp_background</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+    </style>
+</resources>

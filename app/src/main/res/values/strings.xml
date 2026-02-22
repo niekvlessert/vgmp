@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VGMP</string>
+    <string name="no_track_playing">No track playing</string>
+    <string name="search_hint">Search games…</string>
+    <string name="empty_library">No VGM music found.\nTap ⬇ to download some!</string>
+    <string name="download_music">Download Music</string>
+    <string name="download_title">Download VGM Packs</string>
+    <string name="download_start">Download</string>
+    <string name="download_cancel">Cancel</string>
+    <string name="now_playing">Now Playing</string>
+    <string name="btn_prev">Previous</string>
+    <string name="btn_play">Play</string>
+    <string name="btn_pause">Pause</string>
+    <string name="btn_next">Next</string>
+    <string name="btn_random">Random</string>
+    <string name="btn_loop">Loop</string>
+    <string name="action_download">Download Music</string>
+    <string name="track_count">%d tracks</string>
+    <string name="mini_player_tap">Tap for full player</string>
+</resources>
