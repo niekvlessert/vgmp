@@ -36,5 +36,6 @@ data class TrackEntity(
     val title: String,
     val filePath: String,       // absolute path to .vgm/.vgz file
     val durationSamples: Long,  // -1 if unknown
-    val trackIndex: Int         // order within the game
+    val trackIndex: Int,        // order within the game
+    val isFavorite: Boolean = false
 )

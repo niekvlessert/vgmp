@@ -94,6 +94,7 @@ object GameLibrary {
             while (entry != null) {
                 if (!entry.isDirectory) {
                     val name = entry.name.substringAfterLast('/')
+                    Log.d(TAG, "Extracting entry: ${entry.name} -> $name")
                     val outFile = File(gameFolder, sanitizeFilename(name))
                     outFile.outputStream().use { out -> zis.copyTo(out) }
                     when {
@@ -120,6 +121,8 @@ object GameLibrary {
                 entry = zis.nextEntry
             }
         }
+
+        Log.d(TAG, "Imported $zipName: ${vgmFiles.size} VGM files, art=${artFile != null}, m3u=${m3uContent != null}")
 
         if (vgmFiles.isEmpty()) {
             Log.w(TAG, "No VGM files found in $zipName")
@@ -172,10 +175,15 @@ object GameLibrary {
                 try {
                     if (VgmEngine.open(vgmFile.absolutePath)) {
                         val tags = VgmEngine.parseTags(VgmEngine.getTags())
+                        // Use English game name, fallback to Japanese
                         if (tags.gameEn.isNotEmpty()) gameName = tags.gameEn
                         else if (tags.gameJp.isNotEmpty()) gameName = tags.gameJp
-                        systemName = tags.displaySystem
-                        authorName = tags.displayAuthor
+                        // Use English system name, fallback to Japanese
+                        if (tags.systemEn.isNotEmpty()) systemName = tags.systemEn
+                        else if (tags.systemJp.isNotEmpty()) systemName = tags.systemJp
+                        // Use English author name, fallback to Japanese
+                        if (tags.authorEn.isNotEmpty()) authorName = tags.authorEn
+                        else if (tags.authorJp.isNotEmpty()) authorName = tags.authorJp
                         yearStr = tags.date
                         VgmEngine.close()
                     }
@@ -193,7 +201,8 @@ object GameLibrary {
                 title = displayTitle,
                 filePath = vgmFile.absolutePath,
                 durationSamples = durationSamples,
-                trackIndex = idx
+                trackIndex = idx,
+                isFavorite = false
             ))
         }
 
@@ -230,10 +239,10 @@ object GameLibrary {
         name.replace(Regex("[^a-zA-Z0-9._\\-() ]"), "_")
 
     /** Search games by name substring. Returns max 50 results with tracks loaded.
-     * If query is empty, returns favorite games. */
+     * If query is empty, returns all games. */
     suspend fun search(query: String): List<Game> = withContext(Dispatchers.IO) {
         val gameEntities = if (query.isBlank()) {
-            db.gameDao().getFavoriteGames()
+            db.gameDao().getAllGames()
         } else {
             db.gameDao().searchGames(query)
         }
@@ -252,6 +261,16 @@ object GameLibrary {
         db.gameDao().updateGame(updated)
     }
 
+    suspend fun toggleTrackFavorite(trackId: Long) = withContext(Dispatchers.IO) {
+        val track = db.trackDao().getTrackById(trackId) ?: return@withContext
+        val updated = track.copy(isFavorite = !track.isFavorite)
+        db.trackDao().updateTrack(updated)
+    }
+
+    suspend fun getFavoriteTracks(): List<TrackEntity> = withContext(Dispatchers.IO) {
+        db.trackDao().getFavoriteTracks()
+    }
+
     /** Get a specific game with its tracks */
     suspend fun getGame(gameId: Long): Game? = withContext(Dispatchers.IO) {
         val gameEntity = db.gameDao().getAllGames().firstOrNull { it.id == gameId } ?: return@withContext null
@@ -268,5 +287,15 @@ object GameLibrary {
             val tracks = db.trackDao().getTracksForGame(gameEntity.id)
             Game(gameEntity, tracks, null)
         }
+    }
+
+    /** Get count of games in library */
+    suspend fun getGameCount(): Int = withContext(Dispatchers.IO) {
+        db.gameDao().count()
+    }
+
+    /** Check if a game with the given name exists (case-insensitive partial match) */
+    suspend fun gameExists(name: String): Boolean = withContext(Dispatchers.IO) {
+        db.gameDao().searchGames(name).isNotEmpty()
     }
 }

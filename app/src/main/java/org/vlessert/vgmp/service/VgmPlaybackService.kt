@@ -88,6 +88,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private val _playbackState = MutableStateFlow<PlaybackInfo>(PlaybackInfo())
     val playbackInfo = _playbackState.asStateFlow()
 
+    // Library ready state - emits when downloads complete
+    private val _libraryReady = MutableStateFlow(false)
+    val libraryReady: StateFlow<Boolean> = _libraryReady.asStateFlow()
+
     data class PlaybackInfo(
         val playing: Boolean = false,
         val paused: Boolean = false,
@@ -119,14 +123,41 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             extractRoms()
             loadBundledAssets()
             allGames = GameLibrary.getAllGames()
+            _libraryReady.value = true
         }
     }
 
-    private suspend fun loadBundledAssets() {
-        val assetZips = try {
-            assets.list("music")?.map { "music/$it" } ?: emptyList()
-        } catch (e: Exception) { emptyList() }
-        GameLibrary.loadBundledAssetsIfNeeded(this, assetZips)
+    private suspend fun loadBundledAssets() = withContext(Dispatchers.IO) {
+        // Auto-download SD Snatcher, Quarth MSX 2, and Bombaman if not present
+        // This runs regardless of whether database is empty (handles stream installs)
+        val autoDownloadUrls = listOf(
+            "https://vgmrips.net/files/Computers/MSX/SD_Snatcher_(MSX2).zip" to "SD Snatcher",
+            "https://vgmrips.net/files/Computers/MSX/Quarth_(MSX2).zip" to "Quarth",
+            "https://vgmrips.net/files/Computers/MSX/Bombaman_Extra_Ammo_(MSX2).zip" to "Bombaman"
+        )
+        for ((url, gameName) in autoDownloadUrls) {
+            // Check if game already exists
+            if (!GameLibrary.gameExists(gameName)) {
+                try {
+                    Log.d(TAG, "Auto-downloading $gameName")
+                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+                    conn.connectTimeout = 30000
+                    conn.readTimeout = 30000
+                    conn.instanceFollowRedirects = true
+                    if (conn.responseCode in 200..299) {
+                        conn.inputStream.use { input ->
+                            GameLibrary.importZip(input, "$gameName.zip")
+                        }
+                        Log.d(TAG, "Auto-downloaded $gameName successfully")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to auto-download $gameName", e)
+                }
+            } else {
+                Log.d(TAG, "$gameName already exists, skipping auto-download")
+            }
+        }
         allGames = GameLibrary.getAllGames()
     }
 
@@ -482,14 +513,30 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         
         val (nextG, nextT) = when (shuffleMode) {
             ShuffleMode.ALL -> {
-                val gi = (allGames.indices).random()
-                val ti = (allGames[gi].tracks.indices).random()
+                // Weighted random: favorite games have 3x weight
+                val weightedGames = allGames.flatMap { game ->
+                    val weight = if (game.entity.isFavorite) 3 else 1
+                    List(weight) { allGames.indexOf(game) }
+                }
+                val gi = weightedGames.random()
+                // Weighted random: favorite tracks have 3x weight
+                val game = allGames[gi]
+                val weightedTracks = game.tracks.flatMap { track ->
+                    val weight = if (track.isFavorite) 3 else 1
+                    List(weight) { game.tracks.indexOf(track) }
+                }
+                val ti = weightedTracks.random()
                 gi to ti
             }
             ShuffleMode.GAME -> {
                 val game = allGames.getOrNull(currentGameIdx) ?: allGames[0]
                 val gi = allGames.indexOf(game)
-                val ti = (game.tracks.indices).random()
+                // Weighted random: favorite tracks have 3x weight
+                val weightedTracks = game.tracks.flatMap { track ->
+                    val weight = if (track.isFavorite) 3 else 1
+                    List(weight) { game.tracks.indexOf(track) }
+                }
+                val ti = weightedTracks.random()
                 gi to ti
             }
             ShuffleMode.OFF -> {

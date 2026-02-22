@@ -142,6 +142,15 @@ class MainActivity : AppCompatActivity() {
 
     fun getService() = playbackService
 
+    fun refreshLibrary() {
+        supportFragmentManager.fragments.filterIsInstance<LibraryFragment>()
+            .forEach { fragment ->
+                lifecycleScope.launch {
+                    fragment.performSearch("")
+                }
+            }
+    }
+
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
         return true
@@ -152,6 +161,11 @@ class MainActivity : AppCompatActivity() {
             R.id.action_download -> {
                 org.vlessert.vgmp.ui.DownloadDialogFragment.newInstance()
                     .show(supportFragmentManager, "download")
+                true
+            }
+            R.id.action_settings -> {
+                org.vlessert.vgmp.ui.SettingsDialogFragment.newInstance()
+                    .show(supportFragmentManager, "settings")
                 true
             }
             else -> super.onOptionsItemSelected(item)

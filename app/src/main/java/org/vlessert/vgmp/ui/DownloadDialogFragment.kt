@@ -36,6 +36,12 @@ class DownloadDialogFragment : DialogFragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         binding.toolbar.setNavigationOnClickListener { dismissAllowingStateLoss() }
+        
+        // Add VGM Rips search button
+        binding.btnVgmripsSearch.setOnClickListener {
+            VgmRipsSearchFragment.newInstance().show(parentFragmentManager, "vgmrips_search")
+        }
+        
         populateSources()
     }
 

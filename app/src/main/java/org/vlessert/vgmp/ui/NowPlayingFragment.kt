@@ -19,6 +19,7 @@ import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentNowPlayingBinding
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.engine.VgmTags
+import org.vlessert.vgmp.library.GameLibrary
 import org.vlessert.vgmp.service.VgmPlaybackService
 import java.io.File
 
@@ -89,6 +90,13 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             val svc = service ?: return@setOnClickListener
             svc.setLoop(!svc.getLoop())
             updateModeButtons()
+        }
+        binding.btnTrackFavorite.setOnClickListener {
+            val track = service?.currentTrack ?: return@setOnClickListener
+            viewLifecycleOwner.lifecycleScope.launch {
+                GameLibrary.toggleTrackFavorite(track.id)
+                updateTrackFavoriteButton()
+            }
         }
     }
 
@@ -170,7 +178,7 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 svc.spectrum.collect { magnitudes ->
-                    binding.spectrumView.updateFFT(magnitudes)
+                    binding.kaleidoscopeView.updateFFT(magnitudes)
                 }
             }
         }
@@ -205,6 +213,22 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             binding.btnLoop.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
             binding.btnLoop.alpha = 0.5f
         }
+        
+        // Update track favorite button
+        updateTrackFavoriteButton()
+    }
+
+    private fun updateTrackFavoriteButton() {
+        val binding = _binding ?: return
+        val track = service?.currentTrack
+        if (track == null) {
+            binding.btnTrackFavorite.visibility = View.GONE
+            return
+        }
+        binding.btnTrackFavorite.visibility = View.VISIBLE
+        binding.btnTrackFavorite.setImageResource(
+            if (track.isFavorite) R.drawable.ic_star else R.drawable.ic_star_border
+        )
     }
 
     private suspend fun updateVolumeSliders() {

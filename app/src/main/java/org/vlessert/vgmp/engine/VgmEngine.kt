@@ -72,23 +72,35 @@ object VgmEngine {
 
     /**
      * Parse the raw tag string returned by [nGetTags] into a [VgmTags] object.
+     * The format is alternating key-value pairs: "TITLE|||Shop|||TITLE-JPN|||ショップ|||..."
      */
     fun parseTags(raw: String): VgmTags {
         val parts = raw.split("|||")
-        fun get(i: Int) = parts.getOrElse(i) { "" }.trim()
-        // libvgm returns [TrackEn, TrackJp, GameEn, GameJp, SystemEn, SystemJp, AuthorEn, AuthorJp, Date, Creator, Notes]
+        val tagMap = mutableMapOf<String, String>()
+        
+        // Parse alternating key-value pairs
+        var i = 0
+        while (i + 1 < parts.size) {
+            val key = parts[i].trim()
+            val value = parts[i + 1].trim()
+            if (key.isNotEmpty()) {
+                tagMap[key] = value
+            }
+            i += 2
+        }
+        
         return VgmTags(
-            trackEn  = get(0),
-            trackJp  = get(1),
-            gameEn   = get(2),
-            gameJp   = get(3),
-            systemEn = get(4),
-            systemJp = get(5),
-            authorEn = get(6),
-            authorJp = get(7),
-            date     = get(8),
-            creator  = get(9),
-            notes    = get(10)
+            trackEn  = tagMap["TITLE"] ?: "",
+            trackJp  = tagMap["TITLE-JPN"] ?: "",
+            gameEn   = tagMap["GAME"] ?: "",
+            gameJp   = tagMap["GAME-JPN"] ?: "",
+            systemEn = tagMap["SYSTEM"] ?: "",
+            systemJp = tagMap["SYSTEM-JPN"] ?: "",
+            authorEn = tagMap["ARTIST"] ?: "",
+            authorJp = tagMap["ARTIST-JPN"] ?: "",
+            date     = tagMap["DATE"] ?: "",
+            creator  = tagMap["ENCODED_BY"] ?: "",
+            notes    = tagMap["COMMENT"] ?: ""
         )
     }
 

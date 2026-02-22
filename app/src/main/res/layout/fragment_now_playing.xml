@@ -1,227 +1,252 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView
+<FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:layout_height="match_parent">
 
-    <LinearLayout
+    <!-- Kaleidoscope background -->
+    <org.vlessert.vgmp.ui.KaleidoscopeView
+        android:id="@+id/kaleidoscope_view"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@color/vgmp_surface"
-        android:padding="16dp">
+        android:layout_height="match_parent" />
 
-        <!-- Drag handle -->
-        <View
-            android:layout_width="40dp"
-            android:layout_height="4dp"
-            android:layout_gravity="center_horizontal"
-            android:layout_marginBottom="16dp"
-            android:background="@color/vgmp_text_secondary" />
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/content_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
 
-        <!-- Spectrum Analyzer -->
-        <org.vlessert.vgmp.ui.SpectrumView
-            android:id="@+id/spectrum_view"
-            android:layout_width="match_parent"
-            android:layout_height="64dp"
-            android:layout_marginBottom="16dp" />
-
-        <!-- Album art -->
-        <ImageView
-            android:id="@+id/iv_art"
-            android:layout_width="200dp"
-            android:layout_height="200dp"
-            android:layout_gravity="center_horizontal"
-            android:scaleType="centerCrop"
-            android:src="@drawable/ic_album_placeholder"
-            android:contentDescription="Album art" />
-
-        <!-- Track title -->
-        <TextView
-            android:id="@+id/tv_title"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:textColor="@color/vgmp_accent"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:maxLines="2"
-            android:ellipsize="end" />
-
-        <!-- Game name -->
-        <TextView
-            android:id="@+id/tv_game"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="@color/vgmp_text_primary"
-            android:textSize="14sp"
-            android:gravity="center"
-            android:maxLines="1"
-            android:ellipsize="end" />
-
-        <!-- Info details area -->
         <LinearLayout
-            android:id="@+id/info_details"
+            android:id="@+id/content_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:layout_marginTop="8dp"
-            android:gravity="center">
+            android:background="#CC000000"
+            android:padding="16dp">
 
-            <TextView
-                android:id="@+id/tv_system"
-                android:layout_width="wrap_content"
+            <!-- Drag handle -->
+            <View
+                android:layout_width="40dp"
+                android:layout_height="4dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginBottom="16dp"
+                android:background="@color/vgmp_text_secondary" />
+
+            <!-- Album art -->
+            <ImageView
+                android:id="@+id/iv_art"
+                android:layout_width="200dp"
+                android:layout_height="200dp"
+                android:layout_gravity="center_horizontal"
+                android:scaleType="centerCrop"
+                android:src="@drawable/ic_album_placeholder"
+                android:contentDescription="Album art" />
+
+            <!-- Track title with favorite button -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textColor="@color/vgmp_text_secondary"
-                android:textSize="12sp" />
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal"
+                android:gravity="center">
 
-            <TextView
-                android:id="@+id/tv_author"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textColor="@color/vgmp_text_secondary"
-                android:textSize="12sp" />
+                <TextView
+                    android:id="@+id/tv_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/vgmp_accent"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:gravity="center"
+                    android:maxLines="2"
+                    android:ellipsize="end" />
 
-            <TextView
-                android:id="@+id/tv_creator_date"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textColor="@color/vgmp_text_secondary"
-                android:textSize="12sp" />
+                <ImageButton
+                    android:id="@+id/btn_track_favorite"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="8dp"
+                    android:scaleType="fitCenter"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_star_border"
+                    android:tint="@color/vgmp_accent"
+                    android:contentDescription="Toggle track favorite" />
+            </LinearLayout>
 
+            <!-- Game name -->
             <TextView
-                android:id="@+id/tv_notes"
+                android:id="@+id/tv_game"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:textColor="@color/vgmp_text_secondary"
-                android:textSize="11sp"
+                android:textColor="@color/vgmp_text_primary"
+                android:textSize="14sp"
                 android:gravity="center"
-                android:maxLines="3"
+                android:maxLines="1"
                 android:ellipsize="end" />
-        </LinearLayout>
 
-        <!-- Seekbar row -->
-        <SeekBar
-            android:id="@+id/seek_bar"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:progressTint="@color/vgmp_accent"
-            android:thumbTint="@color/vgmp_accent" />
-
-        <!-- Time display -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <TextView
-                android:id="@+id/tv_current_time"
-                android:layout_width="wrap_content"
+            <!-- Info details area -->
+            <LinearLayout
+                android:id="@+id/info_details"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="0:00"
-                android:textColor="@color/vgmp_text_secondary"
-                android:textSize="12sp" />
+                android:orientation="vertical"
+                android:layout_marginTop="8dp"
+                android:gravity="center">
 
-            <View
-                android:layout_width="0dp"
-                android:layout_height="0dp"
-                android:layout_weight="1" />
+                <TextView
+                    android:id="@+id/tv_system"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/vgmp_text_secondary"
+                    android:textSize="12sp" />
 
-            <TextView
-                android:id="@+id/tv_total_time"
-                android:layout_width="wrap_content"
+                <TextView
+                    android:id="@+id/tv_author"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/vgmp_text_secondary"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tv_creator_date"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/vgmp_text_secondary"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tv_notes"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textColor="@color/vgmp_text_secondary"
+                    android:textSize="11sp"
+                    android:gravity="center"
+                    android:maxLines="3"
+                    android:ellipsize="end" />
+            </LinearLayout>
+
+            <!-- Seekbar row -->
+            <SeekBar
+                android:id="@+id/seek_bar"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="0:00"
-                android:textColor="@color/vgmp_text_secondary"
-                android:textSize="12sp" />
+                android:layout_marginTop="16dp"
+                android:progressTint="@color/vgmp_accent"
+                android:thumbTint="@color/vgmp_accent" />
+
+            <!-- Time display -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tv_current_time"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0:00"
+                    android:textColor="@color/vgmp_text_secondary"
+                    android:textSize="12sp" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/tv_total_time"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0:00"
+                    android:textColor="@color/vgmp_text_secondary"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <!-- Transport controls -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center"
+                android:orientation="horizontal">
+
+                <ImageButton
+                    android:id="@+id/btn_prev"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:src="@drawable/ic_skip_previous"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:tint="@color/vgmp_text_primary"
+                    android:contentDescription="Previous" />
+
+                <ImageButton
+                    android:id="@+id/btn_play_pause"
+                    android:layout_width="72dp"
+                    android:layout_height="72dp"
+                    android:layout_marginHorizontal="16dp"
+                    android:src="@drawable/ic_play"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:tint="@color/vgmp_accent"
+                    android:contentDescription="Play" />
+
+                <ImageButton
+                    android:id="@+id/btn_next"
+                    android:layout_width="56dp"
+                    android:layout_height="56dp"
+                    android:src="@drawable/ic_skip_next"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:tint="@color/vgmp_text_primary"
+                    android:contentDescription="Next" />
+            </LinearLayout>
+
+            <!-- Toggle controls -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:orientation="horizontal">
+
+                <ImageButton
+                    android:id="@+id/btn_random"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:src="@drawable/ic_random"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:tint="@color/vgmp_text_secondary"
+                    android:contentDescription="Shuffle" />
+
+                <ImageButton
+                    android:id="@+id/btn_loop"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="16dp"
+                    android:src="@drawable/ic_loop"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:tint="@color/vgmp_text_secondary"
+                    android:contentDescription="Loop" />
+            </LinearLayout>
+
+            <!-- Chip Volumes divider -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="Sound Chips"
+                android:textColor="@color/vgmp_accent"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:id="@+id/volumes_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="8dp" />
+
         </LinearLayout>
-
-        <!-- Transport controls -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:gravity="center"
-            android:orientation="horizontal">
-
-            <ImageButton
-                android:id="@+id/btn_prev"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:src="@drawable/ic_skip_previous"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:tint="@color/vgmp_text_primary"
-                android:contentDescription="Previous" />
-
-            <ImageButton
-                android:id="@+id/btn_play_pause"
-                android:layout_width="72dp"
-                android:layout_height="72dp"
-                android:layout_marginHorizontal="16dp"
-                android:src="@drawable/ic_play"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:tint="@color/vgmp_accent"
-                android:contentDescription="Play" />
-
-            <ImageButton
-                android:id="@+id/btn_next"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:src="@drawable/ic_skip_next"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:tint="@color/vgmp_text_primary"
-                android:contentDescription="Next" />
-        </LinearLayout>
-
-        <!-- Toggle controls -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center"
-            android:orientation="horizontal">
-
-            <ImageButton
-                android:id="@+id/btn_random"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:src="@drawable/ic_random"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:tint="@color/vgmp_text_secondary"
-                android:contentDescription="Shuffle" />
-
-            <ImageButton
-                android:id="@+id/btn_loop"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:layout_marginStart="16dp"
-                android:src="@drawable/ic_loop"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:tint="@color/vgmp_text_secondary"
-                android:contentDescription="Loop" />
-        </LinearLayout>
-
-        <!-- Chip Volumes divider -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="Sound Chips"
-            android:textColor="@color/vgmp_accent"
-            android:textSize="14sp"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:id="@+id/volumes_container"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:layout_marginTop="8dp" />
-
-    </LinearLayout>
-</androidx.core.widget.NestedScrollView>
+    </androidx.core.widget.NestedScrollView>
+</FrameLayout>

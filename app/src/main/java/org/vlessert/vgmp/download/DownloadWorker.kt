@@ -17,13 +17,25 @@ private const val TAG = "DownloadWorker"
 class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val url = inputData.getString(KEY_URL) ?: return@withContext Result.failure()
+        val rawUrl = inputData.getString(KEY_URL) ?: return@withContext Result.failure()
+        // Convert HTTP to HTTPS (Android requires HTTPS by default)
+        val url = if (rawUrl.startsWith("http://")) rawUrl.replace("http://", "https://") else rawUrl
         val zipName = inputData.getString(KEY_NAME) ?: url.substringAfterLast('/')
 
         try {
             setProgress(workDataOf(KEY_PROGRESS to 0, KEY_STATUS to "Connecting..."))
             val conn = URL(url).openConnection() as HttpURLConnection
-            conn.connect()
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            conn.connectTimeout = 15000
+            conn.readTimeout = 15000
+            conn.instanceFollowRedirects = true
+            
+            val responseCode = conn.responseCode
+            if (responseCode !in 200..299) {
+                Log.e(TAG, "Server returned error: $responseCode ${conn.responseMessage} for $url")
+                return@withContext Result.failure(workDataOf(KEY_STATUS to "Server error: $responseCode"))
+            }
+
             val contentLength = conn.contentLength
             setProgress(workDataOf(KEY_PROGRESS to 0, KEY_STATUS to "Downloading..."))
 
@@ -93,28 +105,10 @@ data class DownloadSource(
 object DownloadSources {
     val presets = listOf(
         DownloadSource(
-            name = "Project 2612 Complete Archive",
-            description = "681 Sega Genesis/Mega Drive game sets",
-            url = "https://archive.org/download/Project2612CompleteArchive20180623681Sets.7z/Project2612%20Complete%20Archive%20%282018-06-23%29%5B681%20sets%5D.7z",
-            fileType = ".7z"
-        ),
-        DownloadSource(
-            name = "VGMRips SMD Pack (Sample)",
-            description = "Sample Sega Mega Drive VGM tracks (zip)",
-            url = "https://vgmrips.net/packs/pack/sonic-the-hedgehog",
+            name = "Quarth (MSX2)",
+            description = "Test MSX2 VGM zip",
+            url = "https://vgmrips.net/files/Computers/MSX/Quarth_%28MSX2%29.zip",
             fileType = ".zip"
-        ),
-        DownloadSource(
-            name = "Sonic the Hedgehog (MD)",
-            description = "Sonic 1 VGM rip – Mega Drive",
-            url = "https://archive.org/download/vgm-packs-sonic/Sonic_the_Hedgehog_MD.zip",
-            fileType = ".zip"
-        ),
-        DownloadSource(
-            name = "Streets of Rage (MD)",
-            description = "Streets of Rage VGM – Mega Drive",
-            url = "https://archive.org/download/vgm-packs-sor/Streets_of_Rage_MD.zip",
-            fileType = ".zip"
-        ),
+        )
     )
 }

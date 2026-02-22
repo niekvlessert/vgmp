@@ -19,6 +19,28 @@
         app:title="@string/download_title"
         app:titleTextColor="@color/vgmp_accent" />
 
+    <!-- VGM Rips Search Button -->
+    <Button
+        android:id="@+id/btn_vgmrips_search"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="12dp"
+        android:text="Search VGM Rips Database"
+        android:textColor="@color/vgmp_text_primary"
+        android:backgroundTint="@color/vgmp_accent"
+        android:drawableStart="@drawable/ic_search"
+        android:drawablePadding="8dp"
+        android:gravity="center" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginBottom="8dp"
+        android:text="Or download from preset sources:"
+        android:textColor="@color/vgmp_text_secondary"
+        android:textSize="12sp" />
+
     <!-- Scrollable list of download sources -->
     <ScrollView
         android:layout_width="match_parent"

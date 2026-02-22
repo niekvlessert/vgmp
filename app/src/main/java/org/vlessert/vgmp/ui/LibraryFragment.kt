@@ -34,6 +34,9 @@ class LibraryFragment : Fragment() {
     private var service: VgmPlaybackService? = null
     private lateinit var adapter: GameAdapter
     private var searchJob: Job? = null
+    private var isLoading = false
+    private var currentQuery = ""
+    private val pageSize = 20
 
     companion object {
         fun newInstance() = LibraryFragment()
@@ -61,8 +64,21 @@ class LibraryFragment : Fragment() {
             },
             getCurrentlyPlayingTrackPath = { service?.currentTrack?.filePath }
         )
-        binding.recyclerGames.layoutManager = LinearLayoutManager(requireContext())
+        val layoutManager = LinearLayoutManager(requireContext())
+        binding.recyclerGames.layoutManager = layoutManager
         binding.recyclerGames.adapter = adapter
+
+        // Implement lazy loading with scroll listener
+        binding.recyclerGames.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                super.onScrolled(recyclerView, dx, dy)
+                val totalItemCount = layoutManager.itemCount
+                val lastVisibleItem = layoutManager.findLastVisibleItemPosition()
+                if (!isLoading && lastVisibleItem >= totalItemCount - 5) {
+                    loadMoreGames()
+                }
+            }
+        })
 
         binding.searchInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -70,7 +86,8 @@ class LibraryFragment : Fragment() {
                 searchJob?.cancel()
                 searchJob = lifecycleScope.launch {
                     delay(300) // debounce
-                    performSearch(s?.toString() ?: "")
+                    currentQuery = s?.toString() ?: ""
+                    performSearch(currentQuery)
                 }
             }
             override fun afterTextChanged(s: Editable?) {}
@@ -103,17 +120,25 @@ class LibraryFragment : Fragment() {
                 adapter.notifyNowPlaying()
             }
         }
+        // Observe library ready state to refresh when downloads complete
+        viewLifecycleOwner.lifecycleScope.launch {
+            svc.libraryReady.collectLatest { ready ->
+                if (ready) {
+                    performSearch(binding.searchInput.text?.toString() ?: "")
+                }
+            }
+        }
         viewLifecycleOwner.lifecycleScope.launch { performSearch(binding.searchInput.text?.toString() ?: "") }
     }
 
-    private suspend fun performSearch(query: String) {
+    suspend fun performSearch(query: String) {
         binding.progressBar.visibility = View.VISIBLE
         val results = GameLibrary.search(query)
         binding.progressBar.visibility = View.GONE
         if (results.isEmpty()) {
             binding.emptyText.visibility = View.VISIBLE
             binding.emptyText.text = if (query.isBlank()) {
-                "No favorites selected.\nUse search to add some!"
+                "No games in library.\nDownload some from the menu!"
             } else {
                 getString(R.string.empty_library)
             }
@@ -126,9 +151,15 @@ class LibraryFragment : Fragment() {
         adapter.submitList(results, allGames)
     }
 
+    private fun loadMoreGames() {
+        // For now, we're loading all games at once since the dataset is typically small
+        // This can be enhanced later for very large libraries
+    }
+
     private fun hideKeyboard() {
         val imm = requireContext().getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
         imm.hideSoftInputFromWindow(binding.searchInput.windowToken, 0)
+        binding.searchInput.clearFocus()
     }
 
     override fun onDestroyView() {
