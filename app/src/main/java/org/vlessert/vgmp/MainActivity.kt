@@ -319,20 +319,20 @@ class MainActivity : AppCompatActivity() {
                 val bm = android.graphics.BitmapFactory.decodeFile(game.artPath)
                 binding.miniPlayer.ivMiniArt.setImageBitmap(bm)
             } catch (e: Exception) {
-                binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.ic_album_placeholder)
+                binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.vgmp_logo)
             }
         } else {
-            binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.ic_album_placeholder)
+            binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.vgmp_logo)
         }
     }
 
     fun getService() = playbackService
-
+    
     fun refreshLibrary() {
         supportFragmentManager.fragments.filterIsInstance<LibraryFragment>()
             .forEach { fragment ->
                 lifecycleScope.launch {
-                    fragment.performSearch("")
+                    fragment.refreshView()
                 }
             }
     }

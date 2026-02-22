@@ -15,7 +15,7 @@
         android:layout_width="54dp"
         android:layout_height="54dp"
         android:scaleType="centerCrop"
-        android:src="@drawable/ic_album_placeholder"
+        android:src="@drawable/vgmp_logo"
         android:contentDescription="Album art" />
 
     <!-- Track info -->

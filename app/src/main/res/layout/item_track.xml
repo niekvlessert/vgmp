@@ -9,6 +9,15 @@
     android:paddingEnd="12dp"
     android:paddingVertical="4dp">
 
+    <ImageView
+        android:id="@+id/iv_track_favorite"
+        android:layout_width="14dp"
+        android:layout_height="14dp"
+        android:src="@drawable/ic_star"
+        android:tint="@color/vgmp_accent"
+        android:visibility="gone"
+        android:contentDescription="Favorite" />
+
     <TextView
         android:id="@+id/tv_track_title"
         android:layout_width="0dp"
@@ -17,7 +26,8 @@
         android:textColor="@color/vgmp_text_primary"
         android:textSize="13sp"
         android:maxLines="1"
-        android:ellipsize="end" />
+        android:ellipsize="end"
+        android:layout_marginStart="4dp" />
 
     <TextView
         android:id="@+id/tv_track_duration"

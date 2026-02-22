@@ -29,7 +29,7 @@
                 android:layout_height="200dp"
                 android:layout_gravity="center_horizontal"
                 android:scaleType="centerCrop"
-                android:src="@drawable/ic_album_placeholder"
+                android:src="@drawable/vgmp_logo"
                 android:contentDescription="Album art" />
 
             <!-- Track title with favorite button -->

@@ -239,15 +239,18 @@ object GameLibrary {
         name.replace(Regex("[^a-zA-Z0-9._\\-() ]"), "_")
 
     /** Search games by name substring. Returns max 50 results with tracks loaded.
-     * If query is empty, returns all games. */
+     * If query is empty, returns all games. Favorites are sorted to the top. */
     suspend fun search(query: String): List<Game> = withContext(Dispatchers.IO) {
         val gameEntities = if (query.isBlank()) {
             db.gameDao().getAllGames()
         } else {
             db.gameDao().searchGames(query)
         }
-        gameEntities.take(MAX_SEARCH_RESULTS).map { gameEntity ->
+        // Sort favorites to top, then by name
+        val sorted = gameEntities.sortedWith(compareByDescending<GameEntity> { it.isFavorite }.thenBy { it.name.lowercase() })
+        sorted.take(MAX_SEARCH_RESULTS).map { gameEntity ->
             val tracks = db.trackDao().getTracksForGame(gameEntity.id)
+            // Keep tracks in original order - don't sort to avoid index mismatch with service
             val artBytes = if (gameEntity.artPath.isNotEmpty()) {
                 try { File(gameEntity.artPath).readBytes() } catch (e: Exception) { null }
             } else null
@@ -265,6 +268,10 @@ object GameLibrary {
         val track = db.trackDao().getTrackById(trackId) ?: return@withContext
         val updated = track.copy(isFavorite = !track.isFavorite)
         db.trackDao().updateTrack(updated)
+    }
+
+    suspend fun getTrackById(trackId: Long): TrackEntity? = withContext(Dispatchers.IO) {
+        db.trackDao().getTrackById(trackId)
     }
 
     suspend fun getFavoriteTracks(): List<TrackEntity> = withContext(Dispatchers.IO) {

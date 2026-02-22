@@ -124,7 +124,7 @@ class VgmRipsSearchFragment : DialogFragment() {
                                     ivArt.setImageBitmap(bitmap)
                                     Log.d(TAG, "Image loaded successfully for ${pack.title}")
                                 } else {
-                                    ivArt.setImageResource(R.drawable.ic_album_placeholder)
+                                    ivArt.setImageResource(R.drawable.vgmp_logo)
                                     Log.w(TAG, "Failed to decode bitmap for ${pack.title}")
                                 }
                             }
@@ -132,12 +132,12 @@ class VgmRipsSearchFragment : DialogFragment() {
                     } catch (e: Exception) {
                         Log.e(TAG, "Error loading image for ${pack.title}: ${e.message}", e)
                         withContext(Dispatchers.Main) {
-                            ivArt.setImageResource(R.drawable.ic_album_placeholder)
+                            ivArt.setImageResource(R.drawable.vgmp_logo)
                         }
                     }
                 }
             } else {
-                ivArt.setImageResource(R.drawable.ic_album_placeholder)
+                ivArt.setImageResource(R.drawable.vgmp_logo)
             }
             
             // Download button - use safeZipUrl for HTTPS

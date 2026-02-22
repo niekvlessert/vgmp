@@ -21,7 +21,7 @@
             android:layout_width="80dp"
             android:layout_height="80dp"
             android:scaleType="centerCrop"
-            android:src="@drawable/ic_album_placeholder"
+            android:src="@drawable/vgmp_logo"
             android:contentDescription="Pack art" />
 
         <!-- Pack info -->

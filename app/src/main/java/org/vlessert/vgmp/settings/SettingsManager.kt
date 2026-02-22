@@ -8,6 +8,7 @@ object SettingsManager {
     private const val KEY_ANALYZER_ENABLED = "analyzer_enabled"
     private const val KEY_TRANSPARENCY_LEVEL = "transparency_level"
     private const val KEY_FADE_TIMEOUT = "fade_timeout"
+    private const val KEY_FAVORITES_ONLY_MODE = "favorites_only_mode"
     
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -35,5 +36,13 @@ object SettingsManager {
     
     fun setFadeTimeout(context: Context, timeout: Int) {
         getPrefs(context).edit().putInt(KEY_FADE_TIMEOUT, timeout.coerceIn(0, 60)).apply()
+    }
+    
+    fun isFavoritesOnlyMode(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_FAVORITES_ONLY_MODE, false)
+    }
+    
+    fun setFavoritesOnlyMode(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_FAVORITES_ONLY_MODE, enabled).apply()
     }
 }

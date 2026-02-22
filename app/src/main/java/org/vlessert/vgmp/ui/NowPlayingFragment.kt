@@ -9,6 +9,8 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.SeekBar
+import android.widget.TextView
+import android.widget.Toast
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.collectLatest
@@ -84,17 +86,43 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             }
             svc.setShuffle(nextMode)
             updateModeButtons()
+            // Show tooltip
+            val tooltipText = when (nextMode) {
+                VgmPlaybackService.ShuffleMode.GAME -> getString(R.string.random_current_game)
+                VgmPlaybackService.ShuffleMode.ALL -> getString(R.string.random_library)
+                VgmPlaybackService.ShuffleMode.OFF -> getString(R.string.random_off)
+            }
+            showStyledToast(tooltipText)
         }
         binding.btnLoop.setOnClickListener {
             val svc = service ?: return@setOnClickListener
-            svc.setLoop(!svc.getLoop())
+            val nextMode = when (svc.getLoop()) {
+                VgmPlaybackService.LoopMode.OFF -> VgmPlaybackService.LoopMode.TRACK
+                VgmPlaybackService.LoopMode.TRACK -> VgmPlaybackService.LoopMode.GAME
+                VgmPlaybackService.LoopMode.GAME -> VgmPlaybackService.LoopMode.OFF
+            }
+            svc.setLoop(nextMode)
             updateModeButtons()
+            // Show tooltip
+            val tooltipText = when (nextMode) {
+                VgmPlaybackService.LoopMode.TRACK -> getString(R.string.loop_current_track)
+                VgmPlaybackService.LoopMode.GAME -> getString(R.string.loop_current_game)
+                VgmPlaybackService.LoopMode.OFF -> getString(R.string.loop_off)
+            }
+            showStyledToast(tooltipText)
         }
         binding.btnTrackFavorite.setOnClickListener {
             val track = service?.currentTrack ?: return@setOnClickListener
             viewLifecycleOwner.lifecycleScope.launch {
                 GameLibrary.toggleTrackFavorite(track.id)
+                // Reload track to get updated favorite status
+                val updatedTrack = GameLibrary.getTrackById(track.id)
+                if (updatedTrack != null) {
+                    service?.updateCurrentTrackFavorite(updatedTrack.isFavorite)
+                }
                 updateTrackFavoriteButton()
+                // Refresh the library to show updated favorite status
+                (activity as? org.vlessert.vgmp.MainActivity)?.refreshLibrary()
             }
         }
     }
@@ -131,7 +159,7 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             binding.tvAuthor.text = ""
             binding.tvCreatorDate.text = ""
             binding.tvNotes.text = ""
-            binding.ivArt.setImageResource(R.drawable.ic_album_placeholder)
+            binding.ivArt.setImageResource(R.drawable.vgmp_logo)
             return
         }
 
@@ -140,10 +168,10 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             try {
                 binding.ivArt.setImageBitmap(BitmapFactory.decodeFile(game.artPath))
             } catch (e: Exception) {
-                binding.ivArt.setImageResource(R.drawable.ic_album_placeholder)
+                binding.ivArt.setImageResource(R.drawable.vgmp_logo)
             }
         } else {
-            binding.ivArt.setImageResource(R.drawable.ic_album_placeholder)
+            binding.ivArt.setImageResource(R.drawable.vgmp_logo)
         }
 
         val durSamples = track.durationSamples
@@ -184,7 +212,6 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             VgmPlaybackService.ShuffleMode.GAME -> {
                 binding.btnRandom.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
                 binding.btnRandom.alpha = 1.0f
-                // Maybe change icon or show a "G" badge? For now just color.
             }
             VgmPlaybackService.ShuffleMode.ALL -> {
                 binding.btnRandom.setColorFilter(resources.getColor(R.color.white, null))
@@ -192,13 +219,20 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             }
         }
         
-        // Loop button color
-        if (svc.getLoop()) {
-            binding.btnLoop.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
-            binding.btnLoop.alpha = 1.0f
-        } else {
-            binding.btnLoop.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
-            binding.btnLoop.alpha = 0.5f
+        // Loop button color - different colors for TRACK vs GAME mode
+        when (svc.getLoop()) {
+            VgmPlaybackService.LoopMode.OFF -> {
+                binding.btnLoop.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
+                binding.btnLoop.alpha = 0.5f
+            }
+            VgmPlaybackService.LoopMode.TRACK -> {
+                binding.btnLoop.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
+                binding.btnLoop.alpha = 1.0f
+            }
+            VgmPlaybackService.LoopMode.GAME -> {
+                binding.btnLoop.setColorFilter(resources.getColor(R.color.white, null))
+                binding.btnLoop.alpha = 1.0f
+            }
         }
         
         // Update track favorite button
@@ -216,6 +250,20 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         binding.btnTrackFavorite.setImageResource(
             if (track.isFavorite) R.drawable.ic_star else R.drawable.ic_star_border
         )
+    }
+
+    private fun showStyledToast(message: String) {
+        val context = context ?: return
+        val inflater = LayoutInflater.from(context)
+        val layout = inflater.inflate(R.layout.custom_toast, null)
+        val textView = layout.findViewById<TextView>(R.id.toast_text)
+        textView.text = message
+        
+        val toast = Toast(context)
+        toast.duration = Toast.LENGTH_SHORT
+        toast.view = layout
+        toast.setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, 100)
+        toast.show()
     }
 
     private suspend fun updateVolumeSliders() {

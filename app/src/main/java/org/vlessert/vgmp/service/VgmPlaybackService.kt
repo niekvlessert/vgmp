@@ -36,6 +36,7 @@ import org.vlessert.vgmp.engine.VgmTags
 import org.vlessert.vgmp.library.Game
 import org.vlessert.vgmp.library.GameLibrary
 import org.vlessert.vgmp.library.TrackEntity
+import org.vlessert.vgmp.settings.SettingsManager
 import java.io.File
 
 class VgmPlaybackService : MediaBrowserServiceCompat() {
@@ -56,6 +57,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     enum class ShuffleMode { OFF, GAME, ALL }
+    enum class LoopMode { OFF, TRACK, GAME }
 
     private lateinit var mediaSession: MediaSessionCompat
     private var audioTrack: AudioTrack? = null
@@ -69,7 +71,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var isPaused  = false
     private var shouldPlayAfterFocusGain = false
     private var shuffleMode = ShuffleMode.OFF
-    private var loopEnabled  = false
+    private var loopMode = LoopMode.OFF
     private var currentTags = VgmTags()
     private var trackDurationMs = 0L
 
@@ -214,7 +216,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             }
         }
         override fun onSetRepeatMode(repeatMode: Int) {
-            loopEnabled = repeatMode == PlaybackStateCompat.REPEAT_MODE_ONE
+            loopMode = when (repeatMode) {
+                PlaybackStateCompat.REPEAT_MODE_ONE -> LoopMode.TRACK
+                PlaybackStateCompat.REPEAT_MODE_ALL -> LoopMode.GAME
+                else -> LoopMode.OFF
+            }
         }
         override fun onSetShuffleMode(shuffleMode: Int) {
             this@VgmPlaybackService.shuffleMode = when(shuffleMode) {
@@ -433,13 +439,22 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     private suspend fun onTrackEnded() {
-        if (loopEnabled) {
-            // Restart same track
-            val game = allGames.getOrNull(currentGameIdx) ?: return
-            val track = game.tracks.getOrNull(currentTrackIdx) ?: return
-            startTrack(game, track)
-        } else {
-            nextTrack()
+        when (loopMode) {
+            LoopMode.TRACK -> {
+                // Restart same track
+                val game = allGames.getOrNull(currentGameIdx) ?: return
+                val track = game.tracks.getOrNull(currentTrackIdx) ?: return
+                startTrack(game, track)
+            }
+            LoopMode.GAME -> {
+                // Next track in same game, loop to start if at end
+                val game = allGames.getOrNull(currentGameIdx) ?: return
+                val nextT = if (currentTrackIdx + 1 < game.tracks.size) currentTrackIdx + 1 else 0
+                loadAndPlay(currentGameIdx, nextT)
+            }
+            LoopMode.OFF -> {
+                nextTrack()
+            }
         }
     }
 
@@ -511,61 +526,193 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         allGames = GameLibrary.getAllGames()
         if (allGames.isEmpty()) return
         
+        val favoritesOnly = SettingsManager.isFavoritesOnlyMode(applicationContext)
+        
         val (nextG, nextT) = when (shuffleMode) {
             ShuffleMode.ALL -> {
-                // Weighted random: favorite games have 3x weight
-                val weightedGames = allGames.flatMap { game ->
-                    val weight = if (game.entity.isFavorite) 3 else 1
-                    List(weight) { allGames.indexOf(game) }
+                if (favoritesOnly) {
+                    // Favorites only: only pick from favorite games and tracks
+                    val favoriteGames = allGames.filter { it.entity.isFavorite }
+                    if (favoriteGames.isEmpty()) {
+                        // No favorite games, fall back to all games with favorite tracks
+                        val gamesWithFavTracks = allGames.filter { game -> game.tracks.any { it.isFavorite } }
+                        if (gamesWithFavTracks.isEmpty()) return // No favorites at all
+                        val game = gamesWithFavTracks.random()
+                        val favTracks = game.tracks.filter { it.isFavorite }
+                        val ti = game.tracks.indexOf(favTracks.random())
+                        allGames.indexOf(game) to ti
+                    } else {
+                        val game = favoriteGames.random()
+                        val favTracks = game.tracks.filter { it.isFavorite }
+                        val tracks = if (favTracks.isNotEmpty()) favTracks else game.tracks
+                        val ti = game.tracks.indexOf(tracks.random())
+                        allGames.indexOf(game) to ti
+                    }
+                } else {
+                    // Weighted random: favorite games have 3x weight
+                    val weightedGames = allGames.flatMap { game ->
+                        val weight = if (game.entity.isFavorite) 3 else 1
+                        List(weight) { allGames.indexOf(game) }
+                    }
+                    val gi = weightedGames.random()
+                    // Weighted random: favorite tracks have 3x weight
+                    val game = allGames[gi]
+                    val weightedTracks = game.tracks.flatMap { track ->
+                        val weight = if (track.isFavorite) 3 else 1
+                        List(weight) { game.tracks.indexOf(track) }
+                    }
+                    val ti = weightedTracks.random()
+                    gi to ti
                 }
-                val gi = weightedGames.random()
-                // Weighted random: favorite tracks have 3x weight
-                val game = allGames[gi]
-                val weightedTracks = game.tracks.flatMap { track ->
-                    val weight = if (track.isFavorite) 3 else 1
-                    List(weight) { game.tracks.indexOf(track) }
-                }
-                val ti = weightedTracks.random()
-                gi to ti
             }
             ShuffleMode.GAME -> {
                 val game = allGames.getOrNull(currentGameIdx) ?: allGames[0]
                 val gi = allGames.indexOf(game)
-                // Weighted random: favorite tracks have 3x weight
-                val weightedTracks = game.tracks.flatMap { track ->
-                    val weight = if (track.isFavorite) 3 else 1
-                    List(weight) { game.tracks.indexOf(track) }
+                if (favoritesOnly) {
+                    // Favorites only: only pick favorite tracks from this game
+                    val favTracks = game.tracks.filter { it.isFavorite }
+                    if (favTracks.isEmpty()) {
+                        // No favorite tracks in this game, move to next game with favorites
+                        val gamesWithFavTracks = allGames.filter { g -> g.tracks.any { it.isFavorite } }
+                        if (gamesWithFavTracks.isEmpty()) return
+                        val nextGame = gamesWithFavTracks.random()
+                        val nextFavTracks = nextGame.tracks.filter { it.isFavorite }
+                        val ti = nextGame.tracks.indexOf(nextFavTracks.random())
+                        allGames.indexOf(nextGame) to ti
+                    } else {
+                        val ti = game.tracks.indexOf(favTracks.random())
+                        gi to ti
+                    }
+                } else {
+                    // Weighted random: favorite tracks have 3x weight
+                    val weightedTracks = game.tracks.flatMap { track ->
+                        val weight = if (track.isFavorite) 3 else 1
+                        List(weight) { game.tracks.indexOf(track) }
+                    }
+                    val ti = weightedTracks.random()
+                    gi to ti
                 }
-                val ti = weightedTracks.random()
-                gi to ti
             }
             ShuffleMode.OFF -> {
-                val game = allGames.getOrNull(currentGameIdx)
-                if (game != null && currentTrackIdx + 1 < game.tracks.size) {
-                    currentGameIdx to currentTrackIdx + 1
-                } else if (loopEnabled && game != null) {
-                    // Loop to start of this game
-                    currentGameIdx to 0
+                if (favoritesOnly) {
+                    // Find next favorite track in sequence
+                    findNextFavoriteTrack()
                 } else {
-                    // Move to next game
-                    val nextG2 = (currentGameIdx + 1) % allGames.size
-                    nextG2 to 0
+                    val game = allGames.getOrNull(currentGameIdx)
+                    if (game != null && currentTrackIdx + 1 < game.tracks.size) {
+                        currentGameIdx to currentTrackIdx + 1
+                    } else if (loopMode == LoopMode.GAME && game != null) {
+                        // Loop to start of this game
+                        currentGameIdx to 0
+                    } else {
+                        // Move to next game
+                        val nextG2 = (currentGameIdx + 1) % allGames.size
+                        nextG2 to 0
+                    }
                 }
             }
         }
         loadAndPlay(nextG, nextT)
+    }
+    
+    private fun findNextFavoriteTrack(): Pair<Int, Int> {
+        // Start searching from current position
+        var gi = currentGameIdx
+        var ti = currentTrackIdx + 1
+        
+        // Search current game first
+        val currentGame = allGames.getOrNull(gi)
+        if (currentGame != null) {
+            for (i in ti until currentGame.tracks.size) {
+                if (currentGame.tracks[i].isFavorite) {
+                    return gi to i
+                }
+            }
+        }
+        
+        // Search remaining games
+        for (gIdx in (gi + 1) until allGames.size) {
+            val game = allGames[gIdx]
+            for (tIdx in game.tracks.indices) {
+                if (game.tracks[tIdx].isFavorite) {
+                    return gIdx to tIdx
+                }
+            }
+        }
+        
+        // Wrap around to beginning
+        for (gIdx in 0..gi) {
+            val game = allGames[gIdx]
+            val startIdx = if (gIdx == gi) 0 else 0
+            for (tIdx in startIdx until game.tracks.size) {
+                if (game.tracks[tIdx].isFavorite) {
+                    return gIdx to tIdx
+                }
+            }
+        }
+        
+        // No favorites found, stay at current position
+        return currentGameIdx to currentTrackIdx
+    }
+    
+    private fun findPreviousFavoriteTrack(): Pair<Int, Int> {
+        // Start searching backwards from current position
+        var gi = currentGameIdx
+        var ti = currentTrackIdx - 1
+        
+        // Search current game first (backwards)
+        val currentGame = allGames.getOrNull(gi)
+        if (currentGame != null && ti >= 0) {
+            for (i in ti downTo 0) {
+                if (currentGame.tracks[i].isFavorite) {
+                    return gi to i
+                }
+            }
+        }
+        
+        // Search previous games (backwards)
+        for (gIdx in (gi - 1) downTo 0) {
+            val game = allGames[gIdx]
+            for (tIdx in (game.tracks.size - 1) downTo 0) {
+                if (game.tracks[tIdx].isFavorite) {
+                    return gIdx to tIdx
+                }
+            }
+        }
+        
+        // Wrap around to end
+        for (gIdx in (allGames.size - 1) downTo gi) {
+            val game = allGames[gIdx]
+            val startIdx = if (gIdx == gi) (game.tracks.size - 1) else (game.tracks.size - 1)
+            for (tIdx in startIdx downTo 0) {
+                if (game.tracks[tIdx].isFavorite) {
+                    return gIdx to tIdx
+                }
+            }
+        }
+        
+        // No favorites found, stay at current position
+        return currentGameIdx to currentTrackIdx
     }
 
     fun previousTrack() {
         serviceScope.launch {
             allGames = GameLibrary.getAllGames()
             if (allGames.isEmpty()) return@launch
-            val nextT = if (currentTrackIdx > 0) currentTrackIdx - 1 else {
-                val prevG = if (currentGameIdx > 0) currentGameIdx - 1 else allGames.size - 1
-                currentGameIdx = prevG
-                (allGames[prevG].tracks.size - 1).coerceAtLeast(0)
+            
+            val favoritesOnly = SettingsManager.isFavoritesOnlyMode(applicationContext)
+            
+            if (favoritesOnly) {
+                val (prevG, prevT) = findPreviousFavoriteTrack()
+                loadAndPlay(prevG, prevT)
+            } else {
+                val nextT = if (currentTrackIdx > 0) currentTrackIdx - 1 else {
+                    val prevG = if (currentGameIdx > 0) currentGameIdx - 1 else allGames.size - 1
+                    currentGameIdx = prevG
+                    (allGames[prevG].tracks.size - 1).coerceAtLeast(0)
+                }
+                loadAndPlay(currentGameIdx, nextT)
             }
-            loadAndPlay(currentGameIdx, nextT)
         }
     }
 
@@ -734,6 +881,23 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     fun getMediaSession() = mediaSession
     fun getAllLoadedGames() = allGames
     fun refreshGames() { serviceScope.launch { allGames = GameLibrary.getAllGames() } }
+    
+    fun updateCurrentTrackFavorite(isFavorite: Boolean) {
+        val gameIdx = currentGameIdx
+        val trackIdx = currentTrackIdx
+        if (gameIdx >= 0 && trackIdx >= 0) {
+            val game = allGames.getOrNull(gameIdx) ?: return
+            val track = game.tracks.getOrNull(trackIdx) ?: return
+            val updatedTrack = track.copy(isFavorite = isFavorite)
+            val updatedTracks = game.tracks.toMutableList()
+            updatedTracks[trackIdx] = updatedTrack
+            val updatedGame = game.copy(tracks = updatedTracks)
+            val updatedGames = allGames.toMutableList()
+            updatedGames[gameIdx] = updatedGame
+            allGames = updatedGames
+        }
+    }
+    
     fun playTrack(game: Game, trackIdx: Int) {
         val gIdx = allGames.indexOfFirst { it.entity.id == game.entity.id }
         if (gIdx >= 0) {
@@ -742,6 +906,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
     fun setShuffle(mode: ShuffleMode) { shuffleMode = mode }
     fun getShuffle(): ShuffleMode = shuffleMode
-    fun setLoop(enabled: Boolean) { loopEnabled = enabled }
-    fun getLoop(): Boolean = loopEnabled
+    fun setLoop(mode: LoopMode) { loopMode = mode }
+    fun getLoop(): LoopMode = loopMode
+    
+    // Legacy boolean setter for compatibility
+    fun setLoopEnabled(enabled: Boolean) { 
+        loopMode = if (enabled) LoopMode.TRACK else LoopMode.OFF 
+    }
+    fun isLoopEnabled(): Boolean = loopMode != LoopMode.OFF
 }

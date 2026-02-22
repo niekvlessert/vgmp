@@ -51,6 +51,9 @@ class SettingsDialogFragment : DialogFragment() {
         val fadeTimeout = SettingsManager.getFadeTimeout(context)
         binding.seekbarFadeTimeout.progress = fadeTimeout
         binding.tvFadeTimeoutValue.text = "${fadeTimeout}s"
+        
+        // Favorites only mode
+        binding.switchFavoritesOnly.isChecked = SettingsManager.isFavoritesOnlyMode(context)
     }
 
     private fun setupListeners() {
@@ -58,6 +61,10 @@ class SettingsDialogFragment : DialogFragment() {
         
         binding.switchAnalyzerEnabled.setOnCheckedChangeListener { _, isChecked ->
             SettingsManager.setAnalyzerEnabled(context, isChecked)
+        }
+        
+        binding.switchFavoritesOnly.setOnCheckedChangeListener { _, isChecked ->
+            SettingsManager.setFavoritesOnlyMode(context, isChecked)
         }
         
         binding.seekbarFadeTimeout.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {

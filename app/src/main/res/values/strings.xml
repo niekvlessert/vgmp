@@ -19,4 +19,12 @@
     <string name="action_settings">Settings</string>
     <string name="track_count">%d tracks</string>
     <string name="mini_player_tap">Tap for full player</string>
+    <!-- Random/Shuffle mode tooltips -->
+    <string name="random_current_game">Random track from current game</string>
+    <string name="random_library">Random track from library</string>
+    <string name="random_off">Shuffle off</string>
+    <!-- Loop mode tooltips -->
+    <string name="loop_current_track">Loop current track</string>
+    <string name="loop_current_game">Loop current game</string>
+    <string name="loop_off">Loop off</string>
 </resources>

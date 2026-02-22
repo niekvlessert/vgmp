@@ -151,6 +151,10 @@ class LibraryFragment : Fragment() {
         adapter.submitList(results, allGames)
     }
 
+    suspend fun refreshView() {
+        performSearch(binding.searchInput.text?.toString() ?: "")
+    }
+
     private fun loadMoreGames() {
         // For now, we're loading all games at once since the dataset is typically small
         // This can be enhanced later for very large libraries
@@ -233,10 +237,10 @@ class GameAdapter(
                     val bm = BitmapFactory.decodeFile(game.artPath)
                     artView.setImageBitmap(bm)
                 } catch (e: Exception) {
-                    artView.setImageResource(R.drawable.ic_album_placeholder)
+                    artView.setImageResource(R.drawable.vgmp_logo)
                 }
             } else {
-                artView.setImageResource(R.drawable.ic_album_placeholder)
+                artView.setImageResource(R.drawable.vgmp_logo)
             }
 
             tracksContainer.visibility = if (expanded) View.VISIBLE else View.GONE
@@ -248,9 +252,12 @@ class GameAdapter(
                         .inflate(R.layout.item_track, tracksContainer, false)
                     val tvTitle = trackView.findViewById<TextView>(R.id.tv_track_title)
                     val tvDuration = trackView.findViewById<TextView>(R.id.tv_track_duration)
+                    val ivFavorite = trackView.findViewById<ImageView>(R.id.iv_track_favorite)
                     val isActive = track.filePath == nowPlayingPath
                     tvTitle.text = track.title
                     tvTitle.isSelected = isActive
+                    // Show favorite star if track is favorite
+                    ivFavorite.visibility = if (track.isFavorite) View.VISIBLE else View.GONE
                     if (isActive) {
                         trackView.setBackgroundResource(R.drawable.track_active_bg)
                         tvTitle.setTextColor(0xFF00FF66.toInt())
