@@ -211,8 +211,13 @@ object GameLibrary {
         var soundChips = ""
         sortedVgm.forEachIndexed { idx, vgmFile ->
             val durationSamples = try {
-                VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
-            } catch (e: Exception) { -1L }
+                val samples = VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
+                Log.d(TAG, "Track $idx (${vgmFile.name}): durationSamples=$samples")
+                samples
+            } catch (e: Exception) { 
+                Log.e(TAG, "Failed to get duration for ${vgmFile.name}", e)
+                -1L 
+            }
 
             // Get tags from first track only (for game name)
             if (idx == 0) {
@@ -449,8 +454,11 @@ object GameLibrary {
             // Multi-track file (NSF, GBS, etc.)
             for (i in 0 until trackCount) {
                 val durationSamples = try {
-                    VgmEngine.getTrackLengthDirect(destFile.absolutePath)
-                } catch (e: Exception) { -1L }
+                    VgmEngine.getTrackLength(destFile.absolutePath, i)
+                } catch (e: Exception) { 
+                    Log.e(TAG, "Failed to get duration for track $i", e)
+                    -1L 
+                }
                 
                 trackEntities.add(TrackEntity(
                     id = 0,
@@ -467,7 +475,10 @@ object GameLibrary {
             // Single-track file
             val durationSamples = try {
                 VgmEngine.getTrackLengthDirect(destFile.absolutePath)
-            } catch (e: Exception) { -1L }
+            } catch (e: Exception) { 
+                Log.e(TAG, "Failed to get duration for ${destFile.name}", e)
+                -1L 
+            }
             
             trackEntities.add(TrackEntity(
                 id = 0,

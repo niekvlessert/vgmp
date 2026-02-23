@@ -54,6 +54,7 @@ object VgmEngine {
     @JvmStatic external fun nSetTrack(trackIndex: Int): Boolean
     @JvmStatic external fun nGetCurrentTrack(): Int
     @JvmStatic external fun nIsMultiTrack(path: String): Boolean
+    @JvmStatic external fun nGetTrackLength(path: String, trackIndex: Int): Long
 
     // ----- Thread-safe wrappers -----
 
@@ -81,6 +82,7 @@ object VgmEngine {
     suspend fun setTrack(trackIndex: Int): Boolean = mutex.withLock { nSetTrack(trackIndex) }
     suspend fun getCurrentTrack(): Int = mutex.withLock { nGetCurrentTrack() }
     suspend fun isMultiTrack(path: String): Boolean = mutex.withLock { nIsMultiTrack(path) }
+    suspend fun getTrackLength(path: String, trackIndex: Int): Long = mutex.withLock { nGetTrackLength(path, trackIndex) }
 
     /**
      * Parse the raw tag string returned by [nGetTags] into a [VgmTags] object.

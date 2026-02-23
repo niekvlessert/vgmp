@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -99,7 +100,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val paused: Boolean = false,
         val gameIdx: Int = -1,
         val trackIdx: Int = -1,
-        val track: TrackEntity? = null
+        val track: TrackEntity? = null,
+        val durationMs: Long = 0L
     )
 
     // Position tracking
@@ -235,15 +237,26 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     
     private lateinit var audioManager: AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
+    private var pendingPlayback: Pair<Game, TrackEntity>? = null // game, track for delayed playback
+    private var hasAudioFocus = false
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         when (focusChange) {
             AudioManager.AUDIOFOCUS_GAIN -> {
+                hasAudioFocus = true
                 audioTrack?.setVolume(1.0f)
                 if (shouldPlayAfterFocusGain) resumeOrPlay()
+                // Handle delayed focus gain for pending playback
+                pendingPlayback?.let { (game, track) ->
+                    Log.d(TAG, "Audio focus gained after delay, starting playback")
+                    pendingPlayback = null
+                    serviceScope.launch { startTrackWithFocus(game, track) }
+                }
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
+                hasAudioFocus = false
                 shouldPlayAfterFocusGain = false
+                pendingPlayback = null
                 pausePlayback()
                 abandonAudioFocus()
             }
@@ -258,6 +271,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     private fun requestAudioFocus(): Boolean {
+        if (hasAudioFocus) return true
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(AudioAttributes.Builder()
@@ -268,7 +283,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 .setOnAudioFocusChangeListener(audioFocusChangeListener)
                 .build()
             val result = audioManager.requestAudioFocus(audioFocusRequest!!)
-            return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            hasAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED || 
+                   result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
         } else {
             @Suppress("DEPRECATION")
             val result = audioManager.requestAudioFocus(
@@ -276,11 +293,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN
             )
+            hasAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
             return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }
     }
 
     private fun abandonAudioFocus() {
+        hasAudioFocus = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         } else {
@@ -327,11 +346,46 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     private suspend fun startTrack(game: Game, track: TrackEntity) {
         stopRenderJob()
-        if (!requestAudioFocus()) {
-            Log.e(TAG, "Failed to get audio focus")
-            return
+        
+        // Request audio focus - handle delayed focus for Android Auto
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build())
+                .setAcceptsDelayedFocusGain(true)
+                .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                .build()
+            val result = audioManager.requestAudioFocus(audioFocusRequest!!)
+            if (result == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
+                Log.e(TAG, "Audio focus request failed")
+                return
+            }
+            if (result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
+                Log.d(TAG, "Audio focus delayed, storing pending playback")
+                pendingPlayback = Pair(game, track)
+                return
+            }
+            hasAudioFocus = true
+        } else {
+            @Suppress("DEPRECATION")
+            val result = audioManager.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN
+            )
+            if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                Log.e(TAG, "Failed to get audio focus")
+                return
+            }
+            hasAudioFocus = true
         }
+        
+        startTrackWithFocus(game, track)
+    }
 
+    private suspend fun startTrackWithFocus(game: Game, track: TrackEntity) {
         val opened = VgmEngine.open(track.filePath)
         if (!opened) {
             Log.e(TAG, "Failed to open ${track.filePath}")
@@ -348,13 +402,21 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
         // Parse tags
         currentTags = VgmEngine.parseTags(VgmEngine.getTags())
-        trackDurationMs = if (track.durationSamples > 0)
-            track.durationSamples * 1000L / SAMPLE_RATE else 0L
+        
+        // Get live duration from engine and compare with stored value
+        val liveDurationSamples = VgmEngine.getTotalSamples()
+        val storedDurationSamples = track.durationSamples
+        trackDurationMs = if (liveDurationSamples > 0)
+            liveDurationSamples * 1000L / SAMPLE_RATE else 0L
+        
+        Log.d(TAG, "Track duration: stored=$storedDurationSamples, live=$liveDurationSamples, trackDurationMs=$trackDurationMs, filePath=${track.filePath}")
 
-        // Album art
-        val artBitmap = if (game.artPath.isNotEmpty() && File(game.artPath).exists()) {
-            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { null }
-        } else null
+        // Album art - use game art or fallback to app logo
+        val artBitmap: Bitmap? = if (game.artPath.isNotEmpty() && File(game.artPath).exists()) {
+            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { getFallbackArt() }
+        } else {
+            getFallbackArt()
+        }
 
         // Update MediaSession metadata (→ AVRCP 1.6)
         val metaBuilder = MediaMetadataCompat.Builder()
@@ -381,7 +443,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         startRenderJob()
         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
         startForeground(NOTIF_ID, buildNotification(true))
-        _playbackState.value = PlaybackInfo(true, false, currentGameIdx, currentTrackIdx, track)
+        _playbackState.value = PlaybackInfo(true, false, currentGameIdx, currentTrackIdx, track, trackDurationMs)
     }
 
     private fun startRenderJob() {
@@ -785,8 +847,17 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
+        // Get album art for notification - use game art or fallback
+        val game = currentGame
+        val largeIcon = if (game?.artPath?.isNotEmpty() == true && File(game.artPath).exists()) {
+            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { getFallbackArt() }
+        } else {
+            getFallbackArt()
+        }
+
         return NotificationCompat.Builder(this, NOTIF_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_music_note)
+            .setLargeIcon(largeIcon)
             .setContentTitle(currentTags.displayTitle.ifEmpty { "VGMP" })
             .setContentText(currentTags.displayGame)
             .setSubText(currentTags.displaySystem)
@@ -833,10 +904,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             if (parentId == MEDIA_ID_ROOT) {
                 // Top-level: list of games
                 allGames.forEachIndexed { gi, game ->
+                    // Get album art for Android Auto browsing - use game art or fallback
+                    val artBitmap: Bitmap? = getScaledArtForAuto(game.artPath)
                     val desc = MediaDescriptionCompat.Builder()
                         .setMediaId("game/$gi")
                         .setTitle(game.name)
                         .setSubtitle(game.system)
+                        .setIconBitmap(artBitmap)
                         .build()
                     items.add(MediaBrowserCompat.MediaItem(desc, MediaBrowserCompat.MediaItem.FLAG_BROWSABLE))
                 }
@@ -847,6 +921,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 val game = allGames.getOrNull(gi) ?: run {
                     result.sendResult(items); return@launch
                 }
+                // Get album art for tracks - use game art or fallback
+                val artBitmap: Bitmap? = getScaledArtForAuto(game.artPath)
                 game.tracks.forEachIndexed { ti, track ->
                     val durMin = track.durationSamples / SAMPLE_RATE / 60
                     val durSec = (track.durationSamples / SAMPLE_RATE) % 60
@@ -855,12 +931,25 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         .setMediaId("$gi/$ti")
                         .setTitle(track.title)
                         .setSubtitle(subtitle)
+                        .setIconBitmap(artBitmap)
                         .build()
                     items.add(MediaBrowserCompat.MediaItem(desc, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE))
                 }
             }
             result.sendResult(items)
         }
+    }
+
+    // Get scaled art for Android Auto (256x256 is recommended size)
+    private fun getScaledArtForAuto(artPath: String): Bitmap? {
+        val rawBitmap: Bitmap? = if (artPath.isNotEmpty() && File(artPath).exists()) {
+            try { BitmapFactory.decodeFile(artPath) } catch (e: Exception) { null }
+        } else null
+
+        val sourceBitmap = rawBitmap ?: getFallbackArt() ?: return null
+
+        // Scale to 256x256 for Android Auto
+        return Bitmap.createScaledBitmap(sourceBitmap, 256, 256, true)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -912,6 +1001,21 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             serviceScope.launch { loadAndPlay(gIdx, trackIdx) }
         }
     }
+    
+    // --- Fallback album art for Android Auto / media display ---
+    private var fallbackArtBitmap: Bitmap? = null
+    
+    private fun getFallbackArt(): Bitmap? {
+        if (fallbackArtBitmap == null) {
+            try {
+                fallbackArtBitmap = BitmapFactory.decodeResource(resources, R.drawable.vgmp_logo)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load fallback art", e)
+            }
+        }
+        return fallbackArtBitmap
+    }
+    
     fun setShuffle(mode: ShuffleMode) { shuffleMode = mode }
     fun getShuffle(): ShuffleMode = shuffleMode
     fun setLoop(mode: LoopMode) { loopMode = mode }

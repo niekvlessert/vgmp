@@ -315,14 +315,42 @@ JNIEXPORT jlong JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
                                                          jclass cls) {
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
-    return (jlong)gVgmPlayer->Tick2Sample(gVgmPlayer->GetTotalTicks());
+    jlong length = (jlong)gVgmPlayer->Tick2Sample(gVgmPlayer->GetTotalTicks());
+    // If length is unreasonably short (< 30 seconds), default to 3 minutes
+    jlong minSamples = (jlong)30 * gSampleRate;
+    if (length < minSamples) {
+      LOGD("nGetTotalSamples VGM: Length %ld samples too short, defaulting to 3 minutes", length);
+      length = (jlong)180 * gSampleRate;
+    }
+    return length;
   }
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     gme_info_t *info;
     if (gme_track_info(gGmePlayer, &info, gGmeTrackIndex) == 0) {
       int length_ms = info->play_length;
+      int intro_ms = info->intro_length;
+      int loop_ms = info->loop_length;
+      
+      LOGD("nGetTotalSamples GME: play_length=%d, intro_length=%d, loop_length=%d", 
+           length_ms, intro_ms, loop_ms);
+      
+      // Use intro + 2 loops for better estimate if available
+      if (intro_ms > 0 && loop_ms > 0) {
+        length_ms = intro_ms + loop_ms * 2;
+        LOGD("nGetTotalSamples: Using intro+2loops = %d ms", length_ms);
+      }
+      
+      // If length is unreasonably short (< 30 seconds), default to 3 minutes
+      if (length_ms < 30000) {
+        LOGD("nGetTotalSamples: Length %d ms too short, defaulting to 3 minutes", length_ms);
+        length_ms = 180000;
+      }
+      
       gme_free_info(info);
-      return (jlong)(length_ms * gSampleRate / 1000);
+      // Cast to jlong BEFORE multiplication to avoid integer overflow
+      jlong result = (jlong)length_ms * gSampleRate / 1000;
+      LOGD("nGetTotalSamples: Final length = %d ms = %ld samples", length_ms, result);
+      return result;
     }
   }
   return 0;
@@ -336,7 +364,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
   }
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     int ms = gme_tell(gGmePlayer);
-    return (jlong)(ms * gSampleRate / 1000);
+    // Cast to jlong BEFORE multiplication to avoid integer overflow
+    return (jlong)ms * gSampleRate / 1000;
   }
   return 0;
 }
@@ -591,22 +620,33 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
     // For NSF/SPC files, play_length is often a default or incorrect value
     // intro_length + loop_length gives more accurate estimate if available
     int length_ms = info->play_length;
+    int intro_ms = info->intro_length;
+    int loop_ms = info->loop_length;
+    
+    LOGD("nGetTrackLengthDirect GME: play_length=%d, intro_length=%d, loop_length=%d", 
+         length_ms, intro_ms, loop_ms);
     
     // Use intro + 2 loops for better estimate if available
-    if (info->intro_length > 0 && info->loop_length > 0) {
-      length_ms = info->intro_length + info->loop_length * 2;
+    if (intro_ms > 0 && loop_ms > 0) {
+      length_ms = intro_ms + loop_ms * 2;
+      LOGD("nGetTrackLengthDirect: Using intro+2loops = %d ms", length_ms);
     }
     
     // If length is unreasonably short (< 30 seconds), default to 3 minutes
     // SPC and NSF files typically loop and don't have a fixed duration
     if (length_ms < 30000) {
+      LOGD("nGetTrackLengthDirect: Length %d ms too short, defaulting to 3 minutes", length_ms);
       length_ms = 180000; // 3 minutes default
     }
     
     gme_free_info(info);
     gme_delete(tempEmu);
     
-    return (jlong)(length_ms * gSampleRate / 1000);
+    // Cast to jlong BEFORE multiplication to avoid integer overflow
+    jlong result = (jlong)length_ms * gSampleRate / 1000;
+    LOGD("nGetTrackLengthDirect: Final length = %d ms = %ld samples", length_ms, result);
+    
+    return result;
   }
 
   // Use libvgm for VGM/VGZ
@@ -629,6 +669,17 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
   }
 
   jlong length = (jlong)locPlayer->Tick2Sample(locPlayer->GetTotalTicks());
+  
+  // If length is unreasonably short (< 30 seconds), default to 3 minutes
+  // Some VGM files have incorrect or placeholder duration metadata
+  jlong minSamples = (jlong)30 * gSampleRate; // 30 seconds in samples
+  if (length < minSamples) {
+    LOGD("nGetTrackLengthDirect VGM: Length %ld samples too short, defaulting to 3 minutes", length);
+    length = (jlong)180 * gSampleRate; // 3 minutes default
+  }
+  
+  LOGD("nGetTrackLengthDirect VGM: Final length = %ld samples", length);
+  
   locPlayer->UnloadFile();
   delete locPlayer;
   DataLoader_Deinit(locLoader);
@@ -655,10 +706,8 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceCount(
       return (jint)ids.size();
     }
   }
-  // libgme doesn't expose device info in the same way
-  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
-    return gme_voice_count(gGmePlayer);
-  }
+  // libgme doesn't support per-voice volume control, so return 0 to hide sliders
+  // (gme_voice_count returns number of voices/channels, but they can't be controlled)
   return 0;
 }
 
@@ -747,6 +796,70 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nIsMultiTrack
   bool result = isGmeFormat(path);
   env->ReleaseStringUTFChars(jpath, path);
   return result ? JNI_TRUE : JNI_FALSE;
+}
+
+// Get track length for a specific track index (for multi-track files like NSF)
+JNIEXPORT jlong JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLength(
+    JNIEnv *env, jclass cls, jstring jpath, jint trackIndex) {
+  const char *path = env->GetStringUTFChars(jpath, nullptr);
+
+  // Check if this is a libgme format
+  if (isGmeFormat(path)) {
+    Music_Emu *tempEmu;
+    gme_err_t err = gme_open_file(path, &tempEmu, gSampleRate);
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    if (err || !tempEmu) {
+      LOGE("nGetTrackLength: gme_open_file failed: %s", err ? err : "null");
+      return 0;
+    }
+    
+    int trackCount = gme_track_count(tempEmu);
+    int actualTrackIndex = (trackIndex >= 0 && trackIndex < trackCount) ? trackIndex : 0;
+    
+    gme_info_t *info;
+    if (gme_track_info(tempEmu, &info, actualTrackIndex) != 0) {
+      LOGE("nGetTrackLength: gme_track_info failed for track %d", actualTrackIndex);
+      gme_delete(tempEmu);
+      return 0;
+    }
+    
+    // For NSF/SPC files, play_length is often a default or incorrect value
+    // intro_length + loop_length gives more accurate estimate if available
+    int length_ms = info->play_length;
+    int intro_ms = info->intro_length;
+    int loop_ms = info->loop_length;
+    
+    LOGD("nGetTrackLength: track %d, play_length=%d, intro_length=%d, loop_length=%d", 
+         actualTrackIndex, length_ms, intro_ms, loop_ms);
+    
+    // Use intro + 2 loops for better estimate if available
+    if (intro_ms > 0 && loop_ms > 0) {
+      length_ms = intro_ms + loop_ms * 2;
+      LOGD("nGetTrackLength: Using intro+2loops = %d ms", length_ms);
+    }
+    
+    // If length is unreasonably short (< 30 seconds), default to 3 minutes
+    // SPC and NSF files typically loop and don't have a fixed duration
+    if (length_ms < 30000) {
+      LOGD("nGetTrackLength: Length %d ms too short, defaulting to 3 minutes", length_ms);
+      length_ms = 180000; // 3 minutes default
+    }
+    
+    gme_free_info(info);
+    gme_delete(tempEmu);
+    
+    // Cast to jlong BEFORE multiplication to avoid integer overflow
+    jlong result = (jlong)length_ms * gSampleRate / 1000;
+    LOGD("nGetTrackLength: Final length for track %d = %d ms = %ld samples", 
+         actualTrackIndex, length_ms, result);
+    
+    return result;
+  }
+
+  // For VGM files, use the regular function (track index is ignored)
+  env->ReleaseStringUTFChars(jpath, path);
+  return Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(env, cls, jpath);
 }
 
 } // extern "C"

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto media icon - larger and more visible on car displays -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Background circle -->
+    <path
+        android:fillColor="#FF1a1a1a"
+        android:pathData="M24,24m-22,0a22,22 0,1 1 44,0a22,22 0,1 1 -44,0"/>
+    <!-- Music note - scaled up for visibility -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M24,6v20.55c-1.18,-0.68 -2.54,-1.05 -4,-1.05c-4.42,0 -8,3.58 -8,8s3.58,8 8,8 8,-3.58 8,-8V14h8V6h-12z"/>
+</vector>

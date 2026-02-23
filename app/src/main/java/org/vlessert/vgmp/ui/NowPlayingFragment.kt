@@ -61,8 +61,12 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         val svc = service ?: return
         val view = view ?: return
         viewLifecycleOwner.lifecycleScope.launch {
-            svc.playbackInfo.collectLatest {
+            svc.playbackInfo.collectLatest { info ->
                 updateUI()
+                // Update duration display from live duration
+                if (info.durationMs > 0) {
+                    binding.tvTotalTime.text = formatTime(info.durationMs)
+                }
             }
         }
     }
@@ -131,18 +135,20 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         binding.seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
-                    val durMs = service?.currentTrack?.durationSamples?.times(1000L)
-                        ?.div(VgmPlaybackService.SAMPLE_RATE) ?: 0L
-                    binding.tvCurrentTime.text = formatTime(progress * durMs / 100L)
+                    val durMs = service?.playbackInfo?.value?.durationMs ?: 0L
+                    if (durMs > 0) {
+                        binding.tvCurrentTime.text = formatTime(progress * durMs / 100L)
+                    }
                 }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) { isSeeking = true }
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
                 isSeeking = false
-                val durMs = service?.currentTrack?.durationSamples?.times(1000L)
-                    ?.div(VgmPlaybackService.SAMPLE_RATE) ?: return
-                val seekMs = (seekBar?.progress ?: 0) * durMs / 100L
-                service?.getMediaSession()?.controller?.transportControls?.seekTo(seekMs)
+                val durMs = service?.playbackInfo?.value?.durationMs ?: 0L
+                if (durMs > 0) {
+                    val seekMs = (seekBar?.progress ?: 0) * durMs / 100L
+                    service?.getMediaSession()?.controller?.transportControls?.seekTo(seekMs)
+                }
             }
         })
     }
@@ -174,11 +180,7 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             binding.ivArt.setImageResource(R.drawable.vgmp_logo)
         }
 
-        val durSamples = track.durationSamples
-        if (durSamples > 0) {
-            val durSecs = durSamples / VgmPlaybackService.SAMPLE_RATE.toLong()
-            binding.tvTotalTime.text = formatTime(durSecs * 1000L)
-        }
+        // Duration is now updated via observePlaybackInfo() using live duration from engine
         
         viewLifecycleOwner.lifecycleScope.launch {
             val rawTags = VgmEngine.getTags()
@@ -269,8 +271,13 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
     private suspend fun updateVolumeSliders() {
         val binding = _binding ?: return
         val container = binding.volumesContainer
+        val header = binding.tvSoundChipsHeader
         
         val count = VgmEngine.getDeviceCount()
+        
+        // Show/hide header based on whether there are chips
+        header.visibility = if (count > 0) android.view.View.VISIBLE else android.view.View.GONE
+        
         // Only clear and rebuild if count changed or container is empty
         if (container.childCount != count) {
             container.removeAllViews()
@@ -314,10 +321,8 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                 val svc = service ?: run { handler.postDelayed(this, 500); return }
                 val playbackState = svc.getMediaSession().controller.playbackState
                 val posMs = playbackState?.position ?: 0L
-                val track = svc.currentTrack
-                val durSamples = track?.durationSamples ?: 0L
-                if (durSamples > 0 && !isSeeking) {
-                    val durMs = durSamples * 1000L / VgmPlaybackService.SAMPLE_RATE.toLong()
+                val durMs = svc.playbackInfo.value.durationMs
+                if (durMs > 0 && !isSeeking) {
                     val pct = (posMs * 100L / durMs).toInt().coerceIn(0, 100)
                     binding.seekBar.progress = pct
                     binding.tvCurrentTime.text = formatTime(posMs)
