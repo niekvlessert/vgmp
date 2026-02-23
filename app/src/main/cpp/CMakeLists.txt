@@ -88,12 +88,17 @@ set(GME_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(GME_ZLIB OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libgme gme_build)
 
+# Include libopenmpt for tracker formats (MOD, XM, S3M, IT, etc.)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libopenmpt openmpt_build)
+
 # JNI glue shared library
 add_library(vgmplayer SHARED vgmplayer_jni.cpp)
 
 target_include_directories(vgmplayer PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/libvgm
     ${CMAKE_CURRENT_SOURCE_DIR}/libgme/gme
+    ${CMAKE_CURRENT_SOURCE_DIR}/libopenmpt
+    ${CMAKE_CURRENT_SOURCE_DIR}/libopenmpt/libopenmpt
 )
 
 target_link_libraries(vgmplayer
@@ -101,6 +106,8 @@ target_link_libraries(vgmplayer
     vgm-emu
     vgm-utils
     gme_static
+    openmpt_static
     log
     android
+    z
 )

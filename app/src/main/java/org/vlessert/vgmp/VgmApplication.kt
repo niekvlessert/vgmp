@@ -20,5 +20,12 @@ class VgmApplication : Application() {
                 "Plok.zip"
             ))
         }
+        
+        // Load bundled tracker files on first run (MOD, XM, S3M, IT, etc.)
+        applicationScope.launch {
+            GameLibrary.loadBundledTrackerFilesIfNeeded(this@VgmApplication, listOf(
+                "ophelias_charm.it"
+            ))
+        }
     }
 }

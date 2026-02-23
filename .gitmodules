@@ -4,3 +4,6 @@
 [submodule "app/src/main/cpp/libgme"]
 	path = app/src/main/cpp/libgme
 	url = https://github.com/libgme/game-music-emu.git
+[submodule "app/src/main/cpp/libopenmpt"]
+	path = app/src/main/cpp/libopenmpt
+	url = https://github.com/OpenMPT/openmpt.git

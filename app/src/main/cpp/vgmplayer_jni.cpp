@@ -1,8 +1,9 @@
 /*
  * vgmplayer_jni.cpp
  *
- * JNI glue layer between Android/Kotlin and libvgm/libgme.
- * Supports VGM/VGZ via libvgm and NSF/NSFE/GBS/SPC/etc via libgme.
+ * JNI glue layer between Android/Kotlin and libvgm/libgme/libopenmpt.
+ * Supports VGM/VGZ via libvgm, NSF/NSFE/GBS/SPC/etc via libgme,
+ * and MOD/XM/S3M/IT/etc via libopenmpt.
  */
 
 #include <algorithm>
@@ -26,15 +27,19 @@
 // libgme for NSF and other formats
 #include "gme.h"
 
+// libopenmpt for tracker formats (MOD, XM, S3M, IT, etc.)
+#include "libopenmpt/libopenmpt.h"
+
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "VgmJNI", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VgmJNI", __VA_ARGS__)
 
 // Player type enumeration
-enum class PlayerType { NONE, LIBVGM, LIBGME };
+enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT };
 
 static PlayerType gPlayerType = PlayerType::NONE;
 static VGMPlayer *gVgmPlayer = nullptr;
 static Music_Emu *gGmePlayer = nullptr;
+static openmpt_module *gOpenmptModule = nullptr;
 static DATA_LOADER *gLoader = nullptr;
 static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
@@ -125,6 +130,50 @@ static bool isGmeFormat(const char *path) {
           strcmp(lowerExt, "spc") == 0);
 }
 
+// Check if file extension is a tracker format supported by libopenmpt
+static bool isOpenmptFormat(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext) return false;
+  ext++; // skip the dot
+  
+  // Convert to lowercase for comparison
+  char lowerExt[8] = {0};
+  for (int i = 0; ext[i] && i < 7; i++) {
+    lowerExt[i] = tolower(ext[i]);
+  }
+  
+  // libopenmpt supported formats (most common ones)
+  return (strcmp(lowerExt, "mod") == 0 ||
+          strcmp(lowerExt, "xm") == 0 ||
+          strcmp(lowerExt, "s3m") == 0 ||
+          strcmp(lowerExt, "it") == 0 ||
+          strcmp(lowerExt, "mptm") == 0 ||
+          strcmp(lowerExt, "669") == 0 ||
+          strcmp(lowerExt, "amf") == 0 ||
+          strcmp(lowerExt, "ams") == 0 ||
+          strcmp(lowerExt, "dbm") == 0 ||
+          strcmp(lowerExt, "digi") == 0 ||
+          strcmp(lowerExt, "dmf") == 0 ||
+          strcmp(lowerExt, "dsm") == 0 ||
+          strcmp(lowerExt, "far") == 0 ||
+          strcmp(lowerExt, "gdm") == 0 ||
+          strcmp(lowerExt, "imf") == 0 ||
+          strcmp(lowerExt, "j2b") == 0 ||
+          strcmp(lowerExt, "mdl") == 0 ||
+          strcmp(lowerExt, "med") == 0 ||
+          strcmp(lowerExt, "mt2") == 0 ||
+          strcmp(lowerExt, "mtm") == 0 ||
+          strcmp(lowerExt, "okt") == 0 ||
+          strcmp(lowerExt, "plm") == 0 ||
+          strcmp(lowerExt, "psm") == 0 ||
+          strcmp(lowerExt, "ptm") == 0 ||
+          strcmp(lowerExt, "rtm") == 0 ||
+          strcmp(lowerExt, "stm") == 0 ||
+          strcmp(lowerExt, "ult") == 0 ||
+          strcmp(lowerExt, "umx") == 0 ||
+          strcmp(lowerExt, "wow") == 0);
+}
+
 static void cleanup() {
   // Cleanup libvgm
   if (gVgmPlayer) {
@@ -138,6 +187,12 @@ static void cleanup() {
   if (gGmePlayer) {
     gme_delete(gGmePlayer);
     gGmePlayer = nullptr;
+  }
+  
+  // Cleanup libopenmpt
+  if (gOpenmptModule) {
+    openmpt_module_destroy(gOpenmptModule);
+    gOpenmptModule = nullptr;
   }
   
   gPlayerType = PlayerType::NONE;
@@ -236,6 +291,50 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     return JNI_TRUE;
   }
 
+  // Check if this is a tracker format for libopenmpt
+  if (isOpenmptFormat(path)) {
+    LOGD("Detected tracker format: %s", path);
+    
+    // Read the entire file into memory for libopenmpt
+    FILE *f = fopen(path, "rb");
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    if (!f) {
+      LOGE("Failed to open tracker file");
+      return JNI_FALSE;
+    }
+    
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    std::vector<char> fileData(fileSize);
+    if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
+      LOGE("Failed to read tracker file");
+      fclose(f);
+      return JNI_FALSE;
+    }
+    fclose(f);
+    
+    gOpenmptModule = openmpt_module_create_from_memory2(
+        fileData.data(), fileSize,
+        openmpt_log_func_silent, nullptr,
+        openmpt_error_func_ignore, nullptr,
+        nullptr, nullptr, nullptr);
+    
+    if (!gOpenmptModule) {
+      LOGE("openmpt_module_create_from_memory2 failed");
+      return JNI_FALSE;
+    }
+    
+    // Sample rate is set during creation, no need to set it separately
+    // libopenmpt uses the sample rate passed to the read functions
+    
+    gPlayerType = PlayerType::LIBOPENMPT;
+    LOGD("nOpen: libopenmpt success, sampleRate=%u", gSampleRate);
+    return JNI_TRUE;
+  }
+
   // Use libvgm for VGM/VGZ files
   gLoader = FileLoader_Init(path);
   if (!gLoader) {
@@ -316,6 +415,11 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     return gme_track_ended(gGmePlayer) ? JNI_TRUE : JNI_FALSE;
   }
+  if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
+    // Tracker modules loop forever by default - check if we've reached end
+    // openmpt doesn't have a built-in "ended" check, so we rely on position
+    return JNI_FALSE;  // Tracker files typically loop forever
+  }
   return JNI_TRUE;
 }
 
@@ -367,6 +471,11 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
       return (jlong)length_ms * gSampleRate / 1000;
     }
   }
+  if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
+    // Tracker modules don't have a fixed duration - they loop
+    // Return a reasonable default (3 minutes)
+    return (jlong)180 * gSampleRate;
+  }
   return 0;
 }
 
@@ -381,6 +490,10 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
     // Cast to jlong BEFORE multiplication to avoid integer overflow
     return (jlong)ms * gSampleRate / 1000;
   }
+  if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
+    double seconds = openmpt_module_get_position_seconds(gOpenmptModule);
+    return (jlong)(seconds * gSampleRate);
+  }
   return 0;
 }
 
@@ -392,6 +505,10 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     int ms = (int)(samplePos * 1000 / gSampleRate);
     gme_seek(gGmePlayer, ms);
+  }
+  if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
+    double seconds = (double)samplePos / gSampleRate;
+    openmpt_module_set_position_seconds(gOpenmptModule, seconds);
   }
 }
 
@@ -453,6 +570,16 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
         gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
         gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
       }
+    }
+  } else if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
+    // libopenmpt outputs stereo interleaved
+    written = (jint)openmpt_module_read_interleaved_stereo(gOpenmptModule, gSampleRate, frames, dst);
+    
+    // Feed mono samples to FFT ring buffer
+    for (jint i = 0; i < written; i++) {
+      float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+      gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+      gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
     }
   }
 
@@ -698,6 +825,78 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += "|||";
     
     gme_free_info(info);
+    return env->NewStringUTF(s.c_str());
+  }
+  
+  // Handle tracker formats via libopenmpt
+  if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
+    std::string s;
+    
+    // TITLE
+    s += "TITLE";
+    s += "|||";
+    const char *title = openmpt_module_get_metadata(gOpenmptModule, "title");
+    s += title ? title : "";
+    s += "|||";
+    if (title) openmpt_free_string(title);
+    
+    // GAME (use message or tracker)
+    s += "GAME";
+    s += "|||";
+    const char *message = openmpt_module_get_metadata(gOpenmptModule, "message");
+    s += message ? message : "";
+    s += "|||";
+    if (message) openmpt_free_string(message);
+    
+    // GAME-JPN
+    s += "GAME-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // SYSTEM (tracker type)
+    s += "SYSTEM";
+    s += "|||";
+    const char *tracker = openmpt_module_get_metadata(gOpenmptModule, "tracker");
+    s += tracker ? tracker : "Tracker";
+    s += "|||";
+    if (tracker) openmpt_free_string(tracker);
+    
+    // SYSTEM-JPN
+    s += "SYSTEM-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // ARTIST
+    s += "ARTIST";
+    s += "|||";
+    const char *artist = openmpt_module_get_metadata(gOpenmptModule, "artist");
+    s += artist ? artist : "";
+    s += "|||";
+    if (artist) openmpt_free_string(artist);
+    
+    // ARTIST-JPN
+    s += "ARTIST-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // DATE
+    s += "DATE";
+    s += "|||";
+    const char *date = openmpt_module_get_metadata(gOpenmptModule, "date");
+    s += date ? date : "";
+    s += "|||";
+    if (date) openmpt_free_string(date);
+    
+    // ENCODED_BY
+    s += "ENCODED_BY";
+    s += "|||";
+    s += "|||";
+    
+    // COMMENT
+    s += "COMMENT";
+    s += "|||";
+    s += "|||";
+    
     return env->NewStringUTF(s.c_str());
   }
   

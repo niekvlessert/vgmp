@@ -13,7 +13,9 @@ private const val TAG = "GameLibrary"
 private const val MAX_SEARCH_RESULTS = 50
 private val VGM_EXTENSIONS = listOf(".vgm", ".vgz")
 private val GME_EXTENSIONS = listOf(".nsf", ".nsfe", ".gbs", ".gym", ".hes", ".kss", ".ay", ".sap", ".spc")
-private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS
+private val TRACKER_EXTENSIONS = listOf(".mod", ".xm", ".s3m", ".it", ".mptm", ".stm", ".far", ".ult", ".med", ".mtm", ".psm", ".amf", ".okt", ".dsm", ".dtm", ".umx")
+private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + TRACKER_EXTENSIONS
+private const val TRACKER_GAME_NAME = "Tracker files"
 
 /** In-memory representation of a loaded game (used in UI / service) */
 data class Game(
@@ -507,4 +509,128 @@ object GameLibrary {
         
         return Game(gameEntity, trackEntities, null)
     }
+    
+    /**
+     * Import a tracker file (MOD, XM, S3M, IT, etc.) into the special "Tracker files" game.
+     * Tracker files are grouped together under a single game entry.
+     */
+    suspend fun importTrackerFile(file: File): Game? = withContext(Dispatchers.IO) {
+        try {
+            _importTrackerFile(file)
+        } catch (e: Exception) {
+            Log.e(TAG, "importTrackerFile failed for ${file.name}", e)
+            null
+        }
+    }
+    
+    private suspend fun _importTrackerFile(file: File): Game? {
+        // Get or create the "Tracker files" game entry
+        var trackerGame = db.gameDao().searchGames(TRACKER_GAME_NAME).firstOrNull()
+        
+        val trackerFolder = File(gamesDir, sanitizeFilename(TRACKER_GAME_NAME)).also { it.mkdirs() }
+        
+        // Copy file to tracker folder
+        val destFile = File(trackerFolder, file.name)
+        file.copyTo(destFile, overwrite = true)
+        
+        VgmEngine.setSampleRate(44100)
+        
+        // Get tags from tracker file
+        var trackTitle = file.nameWithoutExtension
+        var authorName = ""
+        var systemName = "Tracker"
+        
+        try {
+            if (VgmEngine.open(destFile.absolutePath)) {
+                val tags = VgmEngine.parseTags(VgmEngine.getTags())
+                if (tags.trackEn.isNotEmpty()) trackTitle = tags.trackEn
+                if (tags.authorEn.isNotEmpty()) authorName = tags.authorEn
+                VgmEngine.close()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not get tags from tracker file ${file.name}")
+        }
+        
+        // Get duration (tracker files default to 3 minutes in the engine)
+        val durationSamples = try {
+            VgmEngine.getTrackLengthDirect(destFile.absolutePath)
+        } catch (e: Exception) { 
+            Log.e(TAG, "Failed to get duration for ${destFile.name}", e)
+            -1L 
+        }
+        
+        if (trackerGame == null) {
+            // Create new "Tracker files" game
+            val gameEntity = GameEntity(
+                name = TRACKER_GAME_NAME,
+                system = "Various",
+                author = "",
+                year = "",
+                folderPath = trackerFolder.absolutePath,
+                artPath = "",
+                zipSource = "tracker_files"
+            )
+            val gameId = db.gameDao().insertGame(gameEntity)
+            
+            val trackEntity = TrackEntity(
+                id = 0,
+                gameId = gameId,
+                title = trackTitle,
+                filePath = destFile.absolutePath,
+                durationSamples = durationSamples,
+                trackIndex = 0,
+                isFavorite = false
+            )
+            db.trackDao().insertTrack(trackEntity)
+            
+            return Game(gameEntity.copy(id = gameId), listOf(trackEntity), null)
+        } else {
+            // Add to existing "Tracker files" game
+            val existingTracks = db.trackDao().getTracksForGame(trackerGame.id)
+            val nextIndex = existingTracks.size
+            
+            val trackEntity = TrackEntity(
+                id = 0,
+                gameId = trackerGame.id,
+                title = trackTitle,
+                filePath = destFile.absolutePath,
+                durationSamples = durationSamples,
+                trackIndex = nextIndex,
+                isFavorite = false
+            )
+            db.trackDao().insertTrack(trackEntity)
+            
+            val allTracks = db.trackDao().getTracksForGame(trackerGame.id)
+            return Game(trackerGame, allTracks, null)
+        }
+    }
+    
+    /**
+     * Load bundled tracker files from assets on first run.
+     * trackerFiles: list of asset paths like "ophelias_charm.it"
+     */
+    suspend fun loadBundledTrackerFilesIfNeeded(context: Context, trackerFiles: List<String>) =
+        withContext(Dispatchers.IO) {
+            // Check if "Tracker files" game already exists
+            if (db.gameDao().searchGames(TRACKER_GAME_NAME).isNotEmpty()) {
+                Log.d(TAG, "Tracker files game already exists, skipping bundled assets")
+                return@withContext
+            }
+            
+            for (assetPath in trackerFiles) {
+                try {
+                    val fileName = assetPath.substringAfterLast('/')
+                    val tempFile = File(context.cacheDir, fileName)
+                    context.assets.open(assetPath).use { input ->
+                        tempFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    importTrackerFile(tempFile)
+                    tempFile.delete()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load bundled tracker file $assetPath", e)
+                }
+            }
+        }
 }
