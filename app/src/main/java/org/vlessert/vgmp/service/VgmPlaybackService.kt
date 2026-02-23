@@ -80,6 +80,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var fadeStartTimeMs = 0L
     private var isFadingOut = false
     private var currentVolume = 1.0f
+    
+    // Endless loop mode
+    private var endlessLoopMode = false
 
     // Render thread
     private val _spectrum = MutableStateFlow(FloatArray(512))
@@ -101,7 +104,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val gameIdx: Int = -1,
         val trackIdx: Int = -1,
         val track: TrackEntity? = null,
-        val durationMs: Long = 0L
+        val durationMs: Long = 0L,
+        val endlessLoop: Boolean = false
     )
 
     // Position tracking
@@ -400,6 +404,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             }
         }
 
+        // Reset endless loop mode when starting a new track
+        if (endlessLoopMode) {
+            endlessLoopMode = false
+            VgmEngine.setEndlessLoop(false)
+        }
+
         // Parse tags
         currentTags = VgmEngine.parseTags(VgmEngine.getTags())
         
@@ -446,6 +456,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         _playbackState.value = PlaybackInfo(true, false, currentGameIdx, currentTrackIdx, track, trackDurationMs)
     }
 
+    // Position update tracking
+    private var lastPositionUpdateMs = 0L
+    private val POSITION_UPDATE_INTERVAL_MS = 500L
+
     private fun startRenderJob() {
         renderJob = serviceScope.launch(Dispatchers.IO) {
             try {
@@ -464,6 +478,18 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         VgmEngine.getSpectrum(spectrumBuffer)
                         _spectrum.emit(spectrumBuffer)
                     }
+                    
+                    // Periodically update playback state for position tracking (must be BEFORE endless loop check)
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastPositionUpdateMs >= POSITION_UPDATE_INTERVAL_MS) {
+                        lastPositionUpdateMs = now
+                        val pos = currentPositionMs()
+                        Log.d(TAG, "Position update: posMs=$pos, endlessLoop=$endlessLoopMode, isPaused=$isPaused")
+                        updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                    }
+                    
+                    // Skip fade out and track end detection in endless loop mode
+                    if (endlessLoopMode) continue
                     
                     // Trigger fade out before actual end if we know the duration
                     val pos = currentPositionMs()
@@ -539,6 +565,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         if (isPaused) {
             isPaused = false
             playbackStartTimeMs = SystemClock.elapsedRealtime() - pausedPositionMs
+            Log.d(TAG, "resumeOrPlay: pausedPositionMs=$pausedPositionMs, new playbackStartTimeMs=$playbackStartTimeMs, endlessLoop=$endlessLoopMode")
             audioTrack?.play()
             updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
             updateNotification(true)
@@ -550,6 +577,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         if (!isPlaying || isPaused) return
         isPaused = true
         pausedPositionMs = SystemClock.elapsedRealtime() - playbackStartTimeMs
+        Log.d(TAG, "pausePlayback: pausedPositionMs=$pausedPositionMs, endlessLoop=$endlessLoopMode")
         audioTrack?.pause()
         updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
         updateNotification(false)
@@ -1026,4 +1054,20 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         loopMode = if (enabled) LoopMode.TRACK else LoopMode.OFF 
     }
     fun isLoopEnabled(): Boolean = loopMode != LoopMode.OFF
+    
+    // Endless loop mode - track plays forever without ending
+    fun setEndlessLoop(enabled: Boolean) {
+        endlessLoopMode = enabled
+        serviceScope.launch(Dispatchers.IO) {
+            VgmEngine.setEndlessLoop(enabled)
+        }
+        _playbackState.value = _playbackState.value.copy(endlessLoop = enabled)
+    }
+    fun getEndlessLoop(): Boolean = endlessLoopMode
+    
+    /**
+     * Get current playback position in milliseconds.
+     * This directly calculates the position rather than relying on MediaSession's static position.
+     */
+    fun getCurrentPositionMs(): Long = currentPositionMs()
 }

@@ -56,6 +56,10 @@ object VgmEngine {
     @JvmStatic external fun nIsMultiTrack(path: String): Boolean
     @JvmStatic external fun nGetTrackLength(path: String, trackIndex: Int): Long
 
+    // Endless loop mode
+    @JvmStatic external fun nSetEndlessLoop(enabled: Boolean)
+    @JvmStatic external fun nGetEndlessLoop(): Boolean
+
     // ----- Thread-safe wrappers -----
 
     suspend fun setSampleRate(rate: Int) = mutex.withLock { nSetSampleRate(rate) }
@@ -83,6 +87,10 @@ object VgmEngine {
     suspend fun getCurrentTrack(): Int = mutex.withLock { nGetCurrentTrack() }
     suspend fun isMultiTrack(path: String): Boolean = mutex.withLock { nIsMultiTrack(path) }
     suspend fun getTrackLength(path: String, trackIndex: Int): Long = mutex.withLock { nGetTrackLength(path, trackIndex) }
+    
+    // Endless loop mode
+    suspend fun setEndlessLoop(enabled: Boolean) = mutex.withLock { nSetEndlessLoop(enabled) }
+    suspend fun getEndlessLoop(): Boolean = mutex.withLock { nGetEndlessLoop() }
 
     /**
      * Parse the raw tag string returned by [nGetTags] into a [VgmTags] object.

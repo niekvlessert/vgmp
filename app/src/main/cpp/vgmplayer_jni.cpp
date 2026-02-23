@@ -300,8 +300,16 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nStop(JNIEnv *env, jclass cls) {
   // libgme doesn't have a separate stop function
 }
 
+// Endless loop mode - disable track end detection
+static bool gEndlessLoopMode = false;
+
 JNIEXPORT jboolean JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
+  // In endless loop mode, never report track as ended
+  if (gEndlessLoopMode) {
+    return JNI_FALSE;
+  }
+  
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     return (gVgmPlayer->GetState() & PLAYSTATE_END) ? JNI_TRUE : JNI_FALSE;
   }
@@ -309,6 +317,28 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
     return gme_track_ended(gGmePlayer) ? JNI_TRUE : JNI_FALSE;
   }
   return JNI_TRUE;
+}
+
+JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetEndlessLoop(
+    JNIEnv *env, jclass cls, jboolean enabled) {
+  gEndlessLoopMode = (enabled == JNI_TRUE);
+  
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    // For GME, ignore silence to prevent track end detection
+    gme_ignore_silence(gGmePlayer, enabled ? 1 : 0);
+    // Also disable autoload playback limit - this prevents SPC files from
+    // automatically fading out based on their embedded track length metadata
+    gme_set_autoload_playback_limit(gGmePlayer, enabled ? 0 : 1);
+    LOGD("nSetEndlessLoop GME: %s, autoload_limit=%d", 
+         gEndlessLoopMode ? "enabled" : "disabled", enabled ? 0 : 1);
+  }
+  // For VGM, the endless loop is handled by the gEndlessLoopMode flag in nIsEnded
+  LOGD("nSetEndlessLoop: %s", gEndlessLoopMode ? "enabled" : "disabled");
+}
+
+JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetEndlessLoop(
+    JNIEnv *env, jclass cls) {
+  return gEndlessLoopMode ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL

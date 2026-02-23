@@ -64,9 +64,12 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             svc.playbackInfo.collectLatest { info ->
                 updateUI()
                 // Update duration display from live duration
-                if (info.durationMs > 0) {
+                if (info.endlessLoop) {
+                    binding.tvTotalTime.text = "∞"
+                } else if (info.durationMs > 0) {
                     binding.tvTotalTime.text = formatTime(info.durationMs)
                 }
+                updateEndlessLoopButton()
             }
         }
     }
@@ -129,11 +132,20 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                 (activity as? org.vlessert.vgmp.MainActivity)?.refreshLibrary()
             }
         }
+        binding.btnEndlessLoop.setOnClickListener {
+            val svc = service ?: return@setOnClickListener
+            val newMode = !svc.getEndlessLoop()
+            svc.setEndlessLoop(newMode)
+            updateEndlessLoopButton()
+            showStyledToast(if (newMode) "Endless loop enabled" else "Endless loop disabled")
+        }
     }
 
     private fun setupSeekbar() {
         binding.seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                // Don't allow seeking in endless loop mode
+                if (service?.getEndlessLoop() == true) return
                 if (fromUser) {
                     val durMs = service?.playbackInfo?.value?.durationMs ?: 0L
                     if (durMs > 0) {
@@ -141,8 +153,14 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                     }
                 }
             }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) { isSeeking = true }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) { 
+                // Don't allow seeking in endless loop mode
+                if (service?.getEndlessLoop() == true) return
+                isSeeking = true 
+            }
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                // Don't allow seeking in endless loop mode
+                if (service?.getEndlessLoop() == true) return
                 isSeeking = false
                 val durMs = service?.playbackInfo?.value?.durationMs ?: 0L
                 if (durMs > 0) {
@@ -239,6 +257,9 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         
         // Update track favorite button
         updateTrackFavoriteButton()
+        
+        // Update endless loop button
+        updateEndlessLoopButton()
     }
 
     private fun updateTrackFavoriteButton() {
@@ -252,6 +273,28 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         binding.btnTrackFavorite.setImageResource(
             if (track.isFavorite) R.drawable.ic_star else R.drawable.ic_star_border
         )
+    }
+
+    private fun updateEndlessLoopButton() {
+        val binding = _binding ?: return
+        val svc = service ?: return
+        val endlessLoop = svc.getEndlessLoop()
+        
+        if (endlessLoop) {
+            binding.btnEndlessLoop.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
+            binding.btnEndlessLoop.alpha = 1.0f
+            // Show infinity symbol instead of duration
+            binding.tvTotalTime.text = "∞"
+            // Disable seekbar
+            binding.seekBar.isEnabled = false
+            binding.seekBar.alpha = 0.5f
+        } else {
+            binding.btnEndlessLoop.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
+            binding.btnEndlessLoop.alpha = 0.5f
+            // Re-enable seekbar
+            binding.seekBar.isEnabled = true
+            binding.seekBar.alpha = 1.0f
+        }
     }
 
     private fun showStyledToast(message: String) {
@@ -319,10 +362,18 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                 val binding = _binding ?: return
                 if (!isAdded || isRemoving) return
                 val svc = service ?: run { handler.postDelayed(this, 500); return }
-                val playbackState = svc.getMediaSession().controller.playbackState
-                val posMs = playbackState?.position ?: 0L
+                // Use direct position from service instead of MediaSession's static position
+                val posMs = svc.getCurrentPositionMs()
                 val durMs = svc.playbackInfo.value.durationMs
-                if (durMs > 0 && !isSeeking) {
+                val endlessLoop = svc.getEndlessLoop()
+                
+                // Log for debugging
+                android.util.Log.d("NowPlayingFragment", "positionUpdater: posMs=$posMs, durMs=$durMs, endlessLoop=$endlessLoop")
+                
+                // In endless loop mode, just update current time, not the seekbar
+                if (endlessLoop) {
+                    binding.tvCurrentTime.text = formatTime(posMs)
+                } else if (durMs > 0 && !isSeeking) {
                     val pct = (posMs * 100L / durMs).toInt().coerceIn(0, 100)
                     binding.seekBar.progress = pct
                     binding.tvCurrentTime.text = formatTime(posMs)

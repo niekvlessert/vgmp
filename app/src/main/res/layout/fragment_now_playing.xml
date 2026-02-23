@@ -32,13 +32,24 @@
                 android:src="@drawable/vgmp_logo"
                 android:contentDescription="Album art" />
 
-            <!-- Track title with favorite button -->
+            <!-- Track title with favorite and endless loop buttons -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:orientation="horizontal"
                 android:gravity="center">
+
+                <ImageButton
+                    android:id="@+id/btn_endless_loop"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:layout_marginEnd="8dp"
+                    android:scaleType="fitCenter"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_infinity"
+                    android:tint="@color/vgmp_text_secondary"
+                    android:contentDescription="Toggle endless loop" />
 
                 <TextView
                     android:id="@+id/tv_title"
