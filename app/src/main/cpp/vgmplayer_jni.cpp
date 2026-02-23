@@ -507,24 +507,123 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
 }
 
 /**
+ * Convert UTF-16LE to UTF-8.
+ * Simple implementation for Android where iconv is not available.
+ * Handles BMP characters (U+0000 to U+FFFF).
+ */
+static std::string utf16le_to_utf8(const UINT8* data, size_t byteLen) {
+  std::string result;
+  const UINT8* ptr = data;
+  const UINT8* end = data + byteLen;
+  
+  while (ptr + 1 < end) {
+    UINT16 codeUnit = ptr[0] | (ptr[1] << 8);  // UTF-16LE
+    ptr += 2;
+    
+    if (codeUnit == 0) break;  // null terminator
+    
+    if (codeUnit < 0x80) {
+      // 1-byte UTF-8
+      result += (char)codeUnit;
+    } else if (codeUnit < 0x800) {
+      // 2-byte UTF-8
+      result += (char)(0xC0 | (codeUnit >> 6));
+      result += (char)(0x80 | (codeUnit & 0x3F));
+    } else {
+      // 3-byte UTF-8 (BMP characters)
+      result += (char)(0xE0 | (codeUnit >> 12));
+      result += (char)(0x80 | ((codeUnit >> 6) & 0x3F));
+      result += (char)(0x80 | (codeUnit & 0x3F));
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Read GD3 tags directly from VGM file data.
+ * This bypasses libvgm's GetTags() which relies on iconv (not available on Android).
+ * Returns a string in the format: "KEY1|||VALUE1|||KEY2|||VALUE2|||..."
+ */
+static std::string readVgmGd3Tags(const UINT8* fileData, const VGM_HEADER* hdr) {
+  if (!hdr->gd3Ofs || hdr->gd3Ofs >= hdr->eofOfs) {
+    return "";
+  }
+  
+  // Check GD3 magic "Gd3 "
+  if (memcmp(&fileData[hdr->gd3Ofs], "Gd3 ", 4) != 0) {
+    return "";
+  }
+  
+  // GD3 structure: "Gd3 " (4) + version (4) + data size (4) + data
+  UINT32 dataSize = *(UINT32*)(&fileData[hdr->gd3Ofs + 8]);
+  UINT32 dataStart = hdr->gd3Ofs + 12;
+  UINT32 dataEnd = dataStart + dataSize;
+  
+  if (dataEnd > hdr->eofOfs) {
+    dataEnd = hdr->eofOfs;
+  }
+  
+  // GD3 tag order (all UTF-16LE, null-terminated):
+  // 0: Track title (English)
+  // 1: Track title (Japanese)
+  // 2: Game name (English)
+  // 3: Game name (Japanese)
+  // 4: System name (English)
+  // 5: System name (Japanese)
+  // 6: Artist (English)
+  // 7: Artist (Japanese)
+  // 8: Release date
+  // 9: VGM creator (dumper)
+  // 10: Notes
+  
+  const char* tagKeys[] = {
+    "TITLE", "TITLE-JPN", "GAME", "GAME-JPN", "SYSTEM", "SYSTEM-JPN",
+    "ARTIST", "ARTIST-JPN", "DATE", "ENCODED_BY", "COMMENT"
+  };
+  const int tagCount = 11;
+  
+  std::string result;
+  UINT32 pos = dataStart;
+  
+  for (int i = 0; i < tagCount && pos < dataEnd; i++) {
+    // Find null terminator for this string
+    UINT32 start = pos;
+    while (pos + 1 < dataEnd) {
+      UINT16 ch = fileData[pos] | (fileData[pos + 1] << 8);
+      pos += 2;
+      if (ch == 0) break;
+    }
+    
+    // Convert UTF-16LE to UTF-8
+    std::string value = utf16le_to_utf8(&fileData[start], pos - start - 2);
+    
+    // Add to result
+    result += tagKeys[i];
+    result += "|||";
+    result += value;
+    result += "|||";
+  }
+  
+  return result;
+}
+
+/**
  * Get track tags as a single string:
  * "TrkE|||TrkJ|||GmE|||GmJ|||SysE|||SysJ|||AutE|||AutJ|||..."
  */
 JNIEXPORT jstring JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
-    const char *const *t = gVgmPlayer->GetTags();
-    if (!t) {
-      return env->NewStringUTF("");
+    // Read GD3 tags directly from file data to bypass iconv dependency
+    const VGM_HEADER* hdr = gVgmPlayer->GetFileHeader();
+    UINT8* fileData = DataLoader_GetData(gLoader);
+    
+    if (hdr && fileData) {
+      std::string tags = readVgmGd3Tags(fileData, hdr);
+      return env->NewStringUTF(tags.c_str());
     }
-
-    std::string s;
-    while (*t) {
-      s += *t;
-      s += "|||";
-      ++t;
-    }
-    return env->NewStringUTF(s.c_str());
+    return env->NewStringUTF("");
   }
   
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
@@ -749,7 +848,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceVolume(
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetDeviceVolume(
     JNIEnv *env, jclass cls, jint id, jint vol) {
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
-    gVgmPlayer->SetDeviceVolume(id, (UINT32)vol);
+    gVgmPlayer->SetDeviceVolume(id, (UINT16)vol);
   }
   // libgme doesn't support per-device volume
 }

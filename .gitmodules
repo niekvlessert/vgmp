@@ -1,0 +1,6 @@
+[submodule "app/src/main/cpp/libvgm"]
+	path = app/src/main/cpp/libvgm
+	url = https://github.com/ValleyBell/libvgm.git
+[submodule "app/src/main/cpp/libgme"]
+	path = app/src/main/cpp/libgme
+	url = https://github.com/libgme/game-music-emu.git

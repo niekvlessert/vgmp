@@ -207,8 +207,8 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             val tags = svc.getCurrentTags()
             binding.tvTitle.text = tags.displayTitle
             binding.tvGame.text = tags.displayGame
-            binding.tvSystem.text = tags.displaySystem
-            binding.tvAuthor.text = tags.displayAuthor
+            binding.tvSystem.text = if (tags.displaySystem.isNotEmpty()) "System: ${tags.displaySystem}" else ""
+            binding.tvAuthor.text = if (tags.displayAuthor.isNotEmpty()) "Composers: ${tags.displayAuthor}" else ""
             
             val creatorDate = listOf(tags.creator, tags.date).filter { it.isNotEmpty() }.joinToString(" | ")
             binding.tvCreatorDate.text = creatorDate
