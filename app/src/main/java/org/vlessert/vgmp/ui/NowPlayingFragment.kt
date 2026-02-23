@@ -134,6 +134,8 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         }
         binding.btnEndlessLoop.setOnClickListener {
             val svc = service ?: return@setOnClickListener
+            // Don't allow endless loop for SPC files
+            if (svc.isCurrentTrackSpc()) return@setOnClickListener
             val newMode = !svc.getEndlessLoop()
             svc.setEndlessLoop(newMode)
             updateEndlessLoopButton()
@@ -279,6 +281,18 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         val binding = _binding ?: return
         val svc = service ?: return
         val endlessLoop = svc.getEndlessLoop()
+        val isSpc = svc.isCurrentTrackSpc()
+        
+        // Hide endless loop button for SPC files (not supported)
+        if (isSpc) {
+            binding.btnEndlessLoop.visibility = View.GONE
+            // Ensure seekbar is enabled for SPC files
+            binding.seekBar.isEnabled = true
+            binding.seekBar.alpha = 1.0f
+            return
+        }
+        
+        binding.btnEndlessLoop.visibility = View.VISIBLE
         
         if (endlessLoop) {
             binding.btnEndlessLoop.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
@@ -366,9 +380,6 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                 val posMs = svc.getCurrentPositionMs()
                 val durMs = svc.playbackInfo.value.durationMs
                 val endlessLoop = svc.getEndlessLoop()
-                
-                // Log for debugging
-                android.util.Log.d("NowPlayingFragment", "positionUpdater: posMs=$posMs, durMs=$durMs, endlessLoop=$endlessLoop")
                 
                 // In endless loop mode, just update current time, not the seekbar
                 if (endlessLoop) {

@@ -483,8 +483,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastPositionUpdateMs >= POSITION_UPDATE_INTERVAL_MS) {
                         lastPositionUpdateMs = now
-                        val pos = currentPositionMs()
-                        Log.d(TAG, "Position update: posMs=$pos, endlessLoop=$endlessLoopMode, isPaused=$isPaused")
                         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
                     }
                     
@@ -565,7 +563,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         if (isPaused) {
             isPaused = false
             playbackStartTimeMs = SystemClock.elapsedRealtime() - pausedPositionMs
-            Log.d(TAG, "resumeOrPlay: pausedPositionMs=$pausedPositionMs, new playbackStartTimeMs=$playbackStartTimeMs, endlessLoop=$endlessLoopMode")
             audioTrack?.play()
             updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
             updateNotification(true)
@@ -577,7 +574,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         if (!isPlaying || isPaused) return
         isPaused = true
         pausedPositionMs = SystemClock.elapsedRealtime() - playbackStartTimeMs
-        Log.d(TAG, "pausePlayback: pausedPositionMs=$pausedPositionMs, endlessLoop=$endlessLoopMode")
         audioTrack?.pause()
         updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
         updateNotification(false)
@@ -1070,4 +1066,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
      * This directly calculates the position rather than relying on MediaSession's static position.
      */
     fun getCurrentPositionMs(): Long = currentPositionMs()
+    
+    /**
+     * Check if the current track is an SPC file (endless loop not supported).
+     */
+    fun isCurrentTrackSpc(): Boolean {
+        val track = currentTrack ?: return false
+        return track.filePath.endsWith(".spc", ignoreCase = true)
+    }
 }
