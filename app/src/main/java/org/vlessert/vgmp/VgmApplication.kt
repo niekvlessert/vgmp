@@ -24,7 +24,7 @@ class VgmApplication : Application() {
         // Load bundled tracker files on first run (MOD, XM, S3M, IT, etc.)
         applicationScope.launch {
             GameLibrary.loadBundledTrackerFilesIfNeeded(this@VgmApplication, listOf(
-                "ophelias_charm.it"
+                "2nd_reality.s3m"
             ))
         }
     }
