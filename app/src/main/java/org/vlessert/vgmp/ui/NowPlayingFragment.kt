@@ -203,8 +203,8 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         // Duration is now updated via observePlaybackInfo() using live duration from engine
         
         viewLifecycleOwner.lifecycleScope.launch {
-            val rawTags = VgmEngine.getTags()
-            val tags = VgmEngine.parseTags(rawTags)
+            // Use the service's currentTags which has fallback to database values
+            val tags = svc.getCurrentTags()
             binding.tvTitle.text = tags.displayTitle
             binding.tvGame.text = tags.displayGame
             binding.tvSystem.text = tags.displaySystem

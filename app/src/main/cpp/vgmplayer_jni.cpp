@@ -514,8 +514,9 @@ JNIEXPORT jstring JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     const char *const *t = gVgmPlayer->GetTags();
-    if (!t)
+    if (!t) {
       return env->NewStringUTF("");
+    }
 
     std::string s;
     while (*t) {

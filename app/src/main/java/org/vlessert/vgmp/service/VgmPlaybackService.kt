@@ -410,8 +410,24 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             VgmEngine.setEndlessLoop(false)
         }
 
-        // Parse tags
-        currentTags = VgmEngine.parseTags(VgmEngine.getTags())
+        // Parse tags from VGM file
+        val rawTags = VgmEngine.getTags()
+        val parsedTags = VgmEngine.parseTags(rawTags)
+        
+        // Merge with database track info - use database values as fallback if GD3 tags are empty
+        currentTags = VgmTags(
+            trackEn = parsedTags.trackEn.ifEmpty { track.title },
+            trackJp = parsedTags.trackJp,
+            gameEn = parsedTags.gameEn.ifEmpty { game.name },
+            gameJp = parsedTags.gameJp,
+            systemEn = parsedTags.systemEn.ifEmpty { game.system },
+            systemJp = parsedTags.systemJp,
+            authorEn = parsedTags.authorEn,
+            authorJp = parsedTags.authorJp,
+            date = parsedTags.date,
+            creator = parsedTags.creator,
+            notes = parsedTags.notes
+        )
         
         // Get live duration from engine and compare with stored value
         val liveDurationSamples = VgmEngine.getTotalSamples()
@@ -1070,6 +1086,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         mediaSession.setMetadata(metaBuilder.build())
     }
     fun getEndlessLoop(): Boolean = endlessLoopMode
+    
+    /**
+     * Get the current track's tags (with fallback to database values).
+     */
+    fun getCurrentTags(): VgmTags = currentTags
     
     /**
      * Get current playback position in milliseconds.
