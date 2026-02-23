@@ -208,6 +208,7 @@ object GameLibrary {
         val gameId = db.gameDao().insertGame(tempGameEntity)
 
         // Scan tracks for duration + tags
+        var soundChips = ""
         sortedVgm.forEachIndexed { idx, vgmFile ->
             val durationSamples = try {
                 VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
@@ -228,6 +229,22 @@ object GameLibrary {
                         if (tags.authorEn.isNotEmpty()) authorName = tags.authorEn
                         else if (tags.authorJp.isNotEmpty()) authorName = tags.authorJp
                         yearStr = tags.date
+                        
+                        // Get sound chips for VGM files
+                        try {
+                            val deviceCount = VgmEngine.getDeviceCount()
+                            if (deviceCount > 0) {
+                                val chipNames = mutableListOf<String>()
+                                for (i in 0 until deviceCount) {
+                                    val chipName = VgmEngine.getDeviceName(i)
+                                    if (chipName.isNotEmpty()) chipNames.add(chipName)
+                                }
+                                soundChips = chipNames.joinToString(", ")
+                            }
+                        } catch (e: Exception) { 
+                            Log.w(TAG, "Could not get sound chips from ${vgmFile.name}") 
+                        }
+                        
                         VgmEngine.close()
                     }
                 } catch (e: Exception) { Log.w(TAG, "Could not get tags from ${vgmFile.name}") }
@@ -258,7 +275,8 @@ object GameLibrary {
             year = yearStr,
             folderPath = gameFolder.absolutePath,
             artPath = artFile?.absolutePath ?: "",
-            zipSource = zipName
+            zipSource = zipName,
+            soundChips = soundChips
         )
         db.gameDao().insertGame(gameEntity)
         db.trackDao().insertTracks(trackEntities)

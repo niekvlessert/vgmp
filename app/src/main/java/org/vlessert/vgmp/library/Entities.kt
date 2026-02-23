@@ -16,7 +16,8 @@ data class GameEntity(
     val folderPath: String,    // absolute path to extracted game folder on disk
     val artPath: String,       // absolute path to .png art, or ""
     val zipSource: String,     // source zip filename for reference
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val soundChips: String = "" // sound chips used (e.g., "YM2612, SN76489")
 )
 
 @Entity(

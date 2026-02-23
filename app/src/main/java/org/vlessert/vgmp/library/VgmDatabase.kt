@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [GameEntity::class, TrackEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class VgmDatabase : RoomDatabase() {

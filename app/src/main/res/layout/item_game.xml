@@ -52,6 +52,16 @@
                 android:textSize="12sp"
                 android:maxLines="1"
                 android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/tv_chips"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/vgmp_accent"
+                android:textSize="12sp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:visibility="gone" />
         </LinearLayout>
 
         <ImageButton

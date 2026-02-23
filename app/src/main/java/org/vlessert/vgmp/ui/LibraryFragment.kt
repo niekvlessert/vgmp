@@ -219,6 +219,7 @@ class GameAdapter(
         private val artView: ImageView = itemView.findViewById(R.id.iv_art)
         private val nameView: TextView = itemView.findViewById(R.id.tv_game_name)
         private val systemView: TextView = itemView.findViewById(R.id.tv_system)
+        private val chipsView: TextView = itemView.findViewById(R.id.tv_chips)
         val btnFavorite: android.widget.ImageButton = itemView.findViewById(R.id.btn_favorite)
         private val tracksContainer: ViewGroup = itemView.findViewById(R.id.tracks_container)
         private var trackClickListener: ((TrackEntity, Int) -> Unit)? = null
@@ -227,7 +228,37 @@ class GameAdapter(
 
         fun bind(game: Game, globalIdx: Int, expanded: Boolean, nowPlayingTrack: TrackEntity?) {
             nameView.text = game.name
-            systemView.text = game.system
+            
+            // Show system in green for NSF/SPC files, or sound chips for VGM files
+            val isGmeFormat = game.tracks.firstOrNull()?.filePath?.let { path ->
+                path.endsWith(".nsf", ignoreCase = true) ||
+                path.endsWith(".nsfe", ignoreCase = true) ||
+                path.endsWith(".spc", ignoreCase = true) ||
+                path.endsWith(".gbs", ignoreCase = true) ||
+                path.endsWith(".gym", ignoreCase = true) ||
+                path.endsWith(".hes", ignoreCase = true) ||
+                path.endsWith(".kss", ignoreCase = true) ||
+                path.endsWith(".ay", ignoreCase = true) ||
+                path.endsWith(".sap", ignoreCase = true)
+            } ?: false
+            
+            if (isGmeFormat) {
+                // For NSF/SPC: show system in green, hide chips
+                systemView.text = game.system
+                systemView.visibility = if (game.system.isNotEmpty()) View.VISIBLE else View.GONE
+                chipsView.visibility = View.GONE
+            } else {
+                // For VGM: show chips in green (where system normally is), hide system
+                if (game.entity.soundChips.isNotEmpty()) {
+                    systemView.text = game.entity.soundChips
+                    systemView.visibility = View.VISIBLE
+                } else {
+                    systemView.text = game.system
+                    systemView.visibility = if (game.system.isNotEmpty()) View.VISIBLE else View.GONE
+                }
+                chipsView.visibility = View.GONE
+            }
+            
             btnFavorite.setImageResource(
                 if (game.entity.isFavorite) R.drawable.ic_star else R.drawable.ic_star_border
             )
