@@ -418,28 +418,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val storedDurationSamples = track.durationSamples
         trackDurationMs = if (liveDurationSamples > 0)
             liveDurationSamples * 1000L / SAMPLE_RATE else 0L
-        
-        Log.d(TAG, "Track duration: stored=$storedDurationSamples, live=$liveDurationSamples, trackDurationMs=$trackDurationMs, filePath=${track.filePath}")
-
-        // Album art - use game art or fallback to app logo
-        val artBitmap: Bitmap? = if (game.artPath.isNotEmpty() && File(game.artPath).exists()) {
-            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { getFallbackArt() }
-        } else {
-            getFallbackArt()
-        }
 
         // Update MediaSession metadata (→ AVRCP 1.6)
-        val metaBuilder = MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTags.displayTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentTags.displayAuthor.ifEmpty { game.name })
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, currentTags.displayGame.ifEmpty { game.name })
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, currentTags.displaySystem)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, trackDurationMs)
-            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, (currentTrackIdx + 1).toLong())
-        if (artBitmap != null) {
-            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artBitmap)
-        }
-        mediaSession.setMetadata(metaBuilder.build())
+        updateMediaSessionMetadata()
 
         // Start audio track and render loop
         isPlaying = true
@@ -1058,6 +1039,35 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             VgmEngine.setEndlessLoop(enabled)
         }
         _playbackState.value = _playbackState.value.copy(endlessLoop = enabled)
+        // Update MediaSession metadata to show/hide progress bar in notification
+        updateMediaSessionMetadata()
+        // Rebuild notification to reflect the change
+        updateNotification(isPlaying && !isPaused)
+    }
+    
+    private fun updateMediaSessionMetadata() {
+        val game = currentGame ?: return
+        val artBitmap: Bitmap? = if (game.artPath.isNotEmpty() && File(game.artPath).exists()) {
+            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { getFallbackArt() }
+        } else {
+            getFallbackArt()
+        }
+        
+        val metaBuilder = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTags.displayTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentTags.displayAuthor.ifEmpty { game.name })
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, currentTags.displayGame.ifEmpty { game.name })
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, currentTags.displaySystem)
+            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, (currentTrackIdx + 1).toLong())
+        
+        // Set duration to 0 in endless loop mode to hide progress bar, otherwise use actual duration
+        val duration = if (endlessLoopMode) 0L else trackDurationMs
+        metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
+        
+        if (artBitmap != null) {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artBitmap)
+        }
+        mediaSession.setMetadata(metaBuilder.build())
     }
     fun getEndlessLoop(): Boolean = endlessLoopMode
     
