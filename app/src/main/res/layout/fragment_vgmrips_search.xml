@@ -50,6 +50,33 @@
             android:backgroundTint="@color/vgmp_accent" />
     </LinearLayout>
 
+    <!-- Sound chip filter -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Filter by chip: "
+            android:textColor="@color/vgmp_text_secondary"
+            android:textSize="14sp" />
+
+        <Spinner
+            android:id="@+id/chip_spinner"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:background="@drawable/search_bg"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp" />
+    </LinearLayout>
+
     <!-- Progress bar -->
     <ProgressBar
         android:id="@+id/progress_bar"

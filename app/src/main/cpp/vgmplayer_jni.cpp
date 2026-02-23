@@ -588,15 +588,19 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
       return 0;
     }
     
-    // For NSF files, play_length is usually a default (often 2-3 minutes)
+    // For NSF/SPC files, play_length is often a default or incorrect value
     // intro_length + loop_length gives more accurate estimate if available
     int length_ms = info->play_length;
+    
+    // Use intro + 2 loops for better estimate if available
     if (info->intro_length > 0 && info->loop_length > 0) {
-      // Use intro + 2 loops for better estimate
       length_ms = info->intro_length + info->loop_length * 2;
-    } else if (length_ms <= 0) {
-      // Default to 3 minutes if no length info
-      length_ms = 180000;
+    }
+    
+    // If length is unreasonably short (< 30 seconds), default to 3 minutes
+    // SPC and NSF files typically loop and don't have a fixed duration
+    if (length_ms < 30000) {
+      length_ms = 180000; // 3 minutes default
     }
     
     gme_free_info(info);

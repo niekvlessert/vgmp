@@ -82,15 +82,23 @@ object GameLibrary {
                         continue
                     }
                     
-                    // Copy asset to a temp file then import
-                    val tempFile = File(context.cacheDir, fileName)
-                    context.assets.open(assetPath).use { input ->
-                        tempFile.outputStream().use { output ->
-                            input.copyTo(output)
+                    // Handle ZIP files differently - they contain multiple tracks
+                    if (fileName.endsWith(".zip", ignoreCase = true)) {
+                        Log.d(TAG, "Importing bundled ZIP: $fileName")
+                        context.assets.open(assetPath).use { stream ->
+                            importZip(stream, fileName)
                         }
+                    } else {
+                        // Copy asset to a temp file then import as single file
+                        val tempFile = File(context.cacheDir, fileName)
+                        context.assets.open(assetPath).use { input ->
+                            tempFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        importSingleFile(tempFile)
+                        tempFile.delete()
                     }
-                    importSingleFile(tempFile)
-                    tempFile.delete()
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to load bundled audio file $assetPath", e)
                 }

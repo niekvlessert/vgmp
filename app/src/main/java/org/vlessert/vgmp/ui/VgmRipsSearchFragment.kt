@@ -29,6 +29,7 @@ class VgmRipsSearchFragment : DialogFragment() {
     private var _binding: FragmentVgmripsSearchBinding? = null
     private val binding get() = _binding!!
     private var searchResults = listOf<VgmRipsPack>()
+    private var selectedChip = "All Chips"
 
     companion object {
         fun newInstance() = VgmRipsSearchFragment()
@@ -51,35 +52,47 @@ class VgmRipsSearchFragment : DialogFragment() {
             dismissAllowingStateLoss() 
         }
         
+        // Setup chip spinner
+        val chipAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_item, VgmRipsRepository.SOUND_CHIPS)
+        chipAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.chipSpinner.adapter = chipAdapter
+        binding.chipSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                selectedChip = VgmRipsRepository.SOUND_CHIPS[position]
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        
         binding.btnSearch.setOnClickListener {
             val query = binding.searchInput.text?.toString() ?: ""
-            if (query.isNotBlank()) {
-                performSearch(query)
+            if (query.isNotBlank() || selectedChip != "All Chips") {
+                performSearch(query, selectedChip)
             }
         }
         
         binding.searchInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) {
                 val query = binding.searchInput.text?.toString() ?: ""
-                if (query.isNotBlank()) {
-                    performSearch(query)
+                if (query.isNotBlank() || selectedChip != "All Chips") {
+                    performSearch(query, selectedChip)
                 }
                 true
             } else false
         }
     }
 
-    private fun performSearch(query: String) {
+    private fun performSearch(query: String, chipFilter: String) {
         binding.progressBar.visibility = View.VISIBLE
         binding.resultsContainer.removeAllViews()
         
         viewLifecycleOwner.lifecycleScope.launch {
-            searchResults = VgmRipsRepository.search(requireContext(), query)
+            searchResults = VgmRipsRepository.search(requireContext(), query, chipFilter)
             binding.progressBar.visibility = View.GONE
             
             if (searchResults.isEmpty()) {
                 binding.emptyText.visibility = View.VISIBLE
-                binding.emptyText.text = "No results found for \"$query\""
+                val filterDesc = if (chipFilter != "All Chips") " with chip \"$chipFilter\"" else ""
+                binding.emptyText.text = "No results found for \"$query\"$filterDesc"
             } else {
                 binding.emptyText.visibility = View.GONE
                 displayResults()

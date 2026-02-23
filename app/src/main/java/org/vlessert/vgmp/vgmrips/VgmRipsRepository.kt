@@ -13,6 +13,26 @@ private const val TAG = "VgmRipsRepository"
 object VgmRipsRepository {
     private var packs: List<VgmRipsPack>? = null
     
+    // Common sound chips for filtering
+    val SOUND_CHIPS = listOf(
+        "All Chips",
+        "YM2612", "YM2151", "YM2203", "YM2608", "YM3812", "YMF262", "YMF278B",
+        "SN76489", "AY-3-8910", "AY8910",
+        "NES APU", "FDS", "MMC5",
+        "SID", "TED",
+        "OPN", "OPNA", "OPL", "OPL2", "OPL3", "OPL4",
+        "SCC", "SCC+", "MSX-MUSIC", "MSX-AUDIO",
+        "HuC6280", "PC Engine",
+        "K054539", "K053260", "K051649",
+        "C140", "C352",
+        "RF5C68", "RF5C164",
+        "QSound",
+        "ES5503", "ES5506",
+        "OKIM6258", "OKIM6295",
+        "Sega PCM", "Multi-PCM", "PCM",
+        "DAC"
+    )
+    
     suspend fun loadPacks(context: Context): List<VgmRipsPack> = withContext(Dispatchers.IO) {
         packs?.let { return@withContext it }
         
@@ -61,16 +81,34 @@ object VgmRipsRepository {
         }
     }
     
-    suspend fun search(context: Context, query: String): List<VgmRipsPack> = withContext(Dispatchers.IO) {
+    suspend fun search(context: Context, query: String, chipFilter: String = "All Chips"): List<VgmRipsPack> = withContext(Dispatchers.IO) {
         val allPacks = loadPacks(context)
-        if (query.isBlank()) return@withContext emptyList()
+        if (query.isBlank() && chipFilter == "All Chips") return@withContext emptyList()
         
         val lowerQuery = query.lowercase()
+        val lowerChip = chipFilter.lowercase()
+        
         allPacks.filter { pack ->
-            pack.title.lowercase().contains(lowerQuery) ||
-            pack.composer.lowercase().contains(lowerQuery) ||
-            pack.system.lowercase().contains(lowerQuery) ||
-            pack.soundChips.lowercase().contains(lowerQuery)
+            val matchesQuery = query.isBlank() || 
+                pack.title.lowercase().contains(lowerQuery) ||
+                pack.composer.lowercase().contains(lowerQuery) ||
+                pack.system.lowercase().contains(lowerQuery)
+            
+            val matchesChip = chipFilter == "All Chips" || 
+                pack.soundChips.lowercase().contains(lowerChip) ||
+                // Handle common aliases
+                (lowerChip == "ym2612" && pack.soundChips.lowercase().contains("ym2612")) ||
+                (lowerChip == "ym2151" && pack.soundChips.lowercase().contains("ym2151")) ||
+                (lowerChip == "sn76489" && (pack.soundChips.lowercase().contains("sn76489") || pack.soundChips.lowercase().contains("psg"))) ||
+                (lowerChip == "ay-3-8910" && (pack.soundChips.lowercase().contains("ay-3-8910") || pack.soundChips.lowercase().contains("ay8910"))) ||
+                (lowerChip == "nes apu" && (pack.soundChips.lowercase().contains("nes") || pack.soundChips.lowercase().contains("2a03"))) ||
+                (lowerChip == "scc" && pack.soundChips.lowercase().contains("scc")) ||
+                (lowerChip == "opn" && (pack.soundChips.lowercase().contains("opn") || pack.soundChips.lowercase().contains("ym2203"))) ||
+                (lowerChip == "opna" && (pack.soundChips.lowercase().contains("opna") || pack.soundChips.lowercase().contains("ym2608"))) ||
+                (lowerChip == "opl2" && (pack.soundChips.lowercase().contains("opl2") || pack.soundChips.lowercase().contains("ym3812"))) ||
+                (lowerChip == "opl3" && (pack.soundChips.lowercase().contains("opl3") || pack.soundChips.lowercase().contains("ymf262")))
+            
+            matchesQuery && matchesChip
         }.take(50)
     }
 }
