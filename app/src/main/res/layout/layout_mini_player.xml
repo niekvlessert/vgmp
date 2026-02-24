@@ -14,7 +14,7 @@
         android:id="@+id/iv_mini_art"
         android:layout_width="54dp"
         android:layout_height="54dp"
-        android:scaleType="centerCrop"
+        android:scaleType="fitCenter"
         android:src="@drawable/vgmp_logo"
         android:contentDescription="Album art" />
 

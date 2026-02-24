@@ -17,7 +17,9 @@ class VgmApplication : Application() {
         applicationScope.launch {
             GameLibrary.loadBundledAudioFilesIfNeeded(this@VgmApplication, listOf(
                 "Shovel_Knight_Music.nsf",
-                "Plok.zip"
+                "Plok.zip",
+                "doom1.zip",
+                "doom2.zip"
             ))
         }
         

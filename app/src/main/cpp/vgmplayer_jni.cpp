@@ -1,9 +1,9 @@
 /*
  * vgmplayer_jni.cpp
  *
- * JNI glue layer between Android/Kotlin and libvgm/libgme/libopenmpt.
+ * JNI glue layer between Android/Kotlin and libvgm/libgme/libopenmpt/libADLMIDI.
  * Supports VGM/VGZ via libvgm, NSF/NSFE/GBS/SPC/etc via libgme,
- * and MOD/XM/S3M/IT/etc via libopenmpt.
+ * MOD/XM/S3M/IT/etc via libopenmpt, and MIDI via libADLMIDI.
  */
 
 #include <algorithm>
@@ -34,11 +34,14 @@
 #include "kssplay.h"
 #include "kss/kss.h"
 
+// libADLMIDI for MIDI files (OPL3 FM synthesis)
+#include "adlmidi.h"
+
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "VgmJNI", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VgmJNI", __VA_ARGS__)
 
 // Player type enumeration
-enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT, LIBKSS };
+enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT, LIBKSS, LIBADLMIDI };
 
 static PlayerType gPlayerType = PlayerType::NONE;
 static VGMPlayer *gVgmPlayer = nullptr;
@@ -46,6 +49,7 @@ static Music_Emu *gGmePlayer = nullptr;
 static openmpt_module *gOpenmptModule = nullptr;
 static KSS *gKss = nullptr;
 static KSSPLAY *gKssPlay = nullptr;
+static ADL_MIDIPlayer *gAdlPlayer = nullptr;
 static DATA_LOADER *gLoader = nullptr;
 static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
@@ -204,6 +208,25 @@ static bool isOpenmptFormat(const char *path) {
           strcmp(lowerExt, "wow") == 0);
 }
 
+// Check if file extension is a MIDI format supported by libADLMIDI
+static bool isMidiFormat(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext) return false;
+  ext++; // skip the dot
+  
+  // Convert to lowercase for comparison
+  char lowerExt[8] = {0};
+  for (int i = 0; ext[i] && i < 7; i++) {
+    lowerExt[i] = tolower(ext[i]);
+  }
+  
+  // MIDI file formats
+  return (strcmp(lowerExt, "mid") == 0 ||
+          strcmp(lowerExt, "midi") == 0 ||
+          strcmp(lowerExt, "rmi") == 0 ||
+          strcmp(lowerExt, "smf") == 0);
+}
+
 static void cleanup() {
   // Cleanup libvgm
   if (gVgmPlayer) {
@@ -233,6 +256,12 @@ static void cleanup() {
   if (gKss) {
     KSS_delete(gKss);
     gKss = nullptr;
+  }
+  
+  // Cleanup libADLMIDI
+  if (gAdlPlayer) {
+    adl_close(gAdlPlayer);
+    gAdlPlayer = nullptr;
   }
   
   gPlayerType = PlayerType::NONE;
@@ -451,6 +480,39 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     return JNI_TRUE;
   }
 
+  // Check if this is a MIDI format for libADLMIDI
+  if (isMidiFormat(path)) {
+    LOGD("Detected MIDI format: %s", path);
+    
+    // Initialize ADLMIDI with sample rate
+    gAdlPlayer = adl_init(gSampleRate);
+    if (!gAdlPlayer) {
+      LOGE("adl_init failed");
+      env->ReleaseStringUTFChars(jpath, path);
+      return JNI_FALSE;
+    }
+    
+    // Set OPL3 emulator (more accurate than OPL2)
+    adl_setNumChips(gAdlPlayer, 2);  // Use 2 OPL3 chips for better polyphony
+    adl_setBank(gAdlPlayer, 14);     // Bank 14 = DMX (Bobby Prince v2) - Doom bank!
+    adl_setSoftPanEnabled(gAdlPlayer, 1);  // Enable stereo panning
+    
+    // Open the MIDI file
+    int result = adl_openFile(gAdlPlayer, path);
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    if (result != 0) {
+      LOGE("adl_openFile failed: %s", adl_errorInfo(gAdlPlayer));
+      adl_close(gAdlPlayer);
+      gAdlPlayer = nullptr;
+      return JNI_FALSE;
+    }
+    
+    gPlayerType = PlayerType::LIBADLMIDI;
+    LOGD("nOpen: libADLMIDI success, sampleRate=%u, bank=58 (DMXOP2)", gSampleRate);
+    return JNI_TRUE;
+  }
+
   // Use libvgm for VGM/VGZ files
   gLoader = FileLoader_Init(path);
   if (!gLoader) {
@@ -540,6 +602,15 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
     // KSS files can detect stop via KSSPLAY_get_stop_flag
     return KSSPLAY_get_stop_flag(gKssPlay) ? JNI_TRUE : JNI_FALSE;
   }
+  if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
+    // libADLMIDI: check if position >= total length
+    double position = adl_positionTell(gAdlPlayer);
+    double total = adl_totalTimeLength(gAdlPlayer);
+    if (total > 0 && position >= total) {
+      return JNI_TRUE;
+    }
+    return JNI_FALSE;
+  }
   return JNI_TRUE;
 }
 
@@ -560,6 +631,32 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetEndlessLoop(
 JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetEndlessLoop(
     JNIEnv *env, jclass cls) {
   return gEndlessLoopMode ? JNI_TRUE : JNI_FALSE;
+}
+
+// Playback speed control (0.25 to 1.0 for 25% to 100%)
+static double gPlaybackSpeed = 1.0;
+
+JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetPlaybackSpeed(
+    JNIEnv *env, jclass cls, jdouble speed) {
+  gPlaybackSpeed = speed;
+  
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    gVgmPlayer->SetPlaybackSpeed(speed);
+  }
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    // gme_set_tempo uses tempo where 1.0 = normal, 2.0 = double speed
+    gme_set_tempo(gGmePlayer, speed);
+  }
+  if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
+    // KSSPLAY uses CPU speed multiplier (1.0 = normal, 2.0 = double speed)
+    KSSPLAY_set_speed(gKssPlay, speed);
+  }
+  // libopenmpt doesn't have a direct speed control API
+}
+
+JNIEXPORT jdouble JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetPlaybackSpeed(
+    JNIEnv *env, jclass cls) {
+  return gPlaybackSpeed;
 }
 
 JNIEXPORT jlong JNICALL
@@ -609,6 +706,15 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
     // Default to 3 minutes for KSS files
     return (jlong)180 * gSampleRate;
   }
+  if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
+    // MIDI files have variable length - get from libADLMIDI
+    double totalSeconds = adl_totalTimeLength(gAdlPlayer);
+    if (totalSeconds > 0) {
+      return (jlong)(totalSeconds * gSampleRate);
+    }
+    // Default to 3 minutes if duration unknown
+    return (jlong)180 * gSampleRate;
+  }
   return 0;
 }
 
@@ -633,6 +739,10 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
     // Return 0 for now - proper position tracking would need a timer
     return 0;
   }
+  if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
+    double positionSeconds = adl_positionTell(gAdlPlayer);
+    return (jlong)(positionSeconds * gSampleRate);
+  }
   return 0;
 }
 
@@ -648,6 +758,10 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
   if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
     double seconds = (double)samplePos / gSampleRate;
     openmpt_module_set_position_seconds(gOpenmptModule, seconds);
+  }
+  if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
+    double seconds = (double)samplePos / gSampleRate;
+    adl_positionSeek(gAdlPlayer, seconds);
   }
   // KSS doesn't support seeking - would need to reset and render silent
 }
@@ -738,6 +852,20 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
       gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
       gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+    }
+  } else if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
+    // libADLMIDI outputs stereo interleaved 16-bit
+    // adl_play returns number of samples rendered (stereo pairs)
+    int samplesRendered = adl_play(gAdlPlayer, frames * 2, dst);
+    if (samplesRendered > 0) {
+      written = samplesRendered / 2;  // Convert sample count to frame count
+      
+      // Feed mono samples to FFT ring buffer
+      for (jint i = 0; i < written; i++) {
+        float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+        gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+        gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      }
     }
   }
 

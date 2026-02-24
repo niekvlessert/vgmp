@@ -32,6 +32,10 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
     private val service: VgmPlaybackService? get() = (activity as? org.vlessert.vgmp.MainActivity)?.getService()
     private val handler = Handler(Looper.getMainLooper())
     private var isSeeking = false
+    
+    // Playback speed options: 100%, 75%, 50%, 25%
+    private val speedOptions = doubleArrayOf(1.0, 0.75, 0.5, 0.25)
+    private var currentSpeedIndex = 0
 
     companion object {
         fun newInstance() = NowPlayingFragment()
@@ -154,6 +158,17 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             svc.setEndlessLoop(newMode)
             updateEndlessLoopButton()
             showStyledToast(if (newMode) "Endless loop enabled" else "Endless loop disabled")
+        }
+        binding.btnSpeed.setOnClickListener {
+            // Cycle through speed options: 100% -> 75% -> 50% -> 25% -> 100%
+            currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
+            val speed = speedOptions[currentSpeedIndex]
+            viewLifecycleOwner.lifecycleScope.launch {
+                VgmEngine.setPlaybackSpeed(speed)
+                updateSpeedButton()
+                val speedPercent = (speed * 100).toInt()
+                showStyledToast("Speed: $speedPercent%")
+            }
         }
     }
 
@@ -326,6 +341,9 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         
         // Update endless loop button
         updateEndlessLoopButton()
+        
+        // Update speed button
+        updateSpeedButton()
     }
 
     private fun updateTrackFavoriteButton() {
@@ -372,6 +390,31 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             // Re-enable seekbar
             binding.seekBar.isEnabled = true
             binding.seekBar.alpha = 1.0f
+        }
+    }
+
+    private fun updateSpeedButton() {
+        val binding = _binding ?: return
+        val svc = service
+        
+        // Hide speed button for KSS and tracker formats
+        if (svc != null && !svc.isSpeedControlSupported()) {
+            binding.btnSpeed.visibility = View.GONE
+            return
+        }
+        
+        binding.btnSpeed.visibility = View.VISIBLE
+        val speed = speedOptions[currentSpeedIndex]
+        val speedPercent = (speed * 100).toInt()
+        
+        if (speedPercent == 100) {
+            // Normal speed - dimmed appearance
+            binding.btnSpeed.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
+            binding.btnSpeed.alpha = 0.5f
+        } else {
+            // Reduced speed - highlighted
+            binding.btnSpeed.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
+            binding.btnSpeed.alpha = 1.0f
         }
     }
 

@@ -246,13 +246,26 @@ class GameAdapter(
 
             if (game.artPath.isNotEmpty()) {
                 try {
-                    val bm = BitmapFactory.decodeFile(game.artPath)
-                    artView.setImageBitmap(bm)
+                    val bm = GameLibrary.loadScaledArt(game.artPath, 80, 80)
+                    if (bm != null) {
+                        artView.setImageBitmap(bm)
+                        // Set black background for KSS games (transparent images)
+                        if (game.soundChips == "KSS") {
+                            artView.setBackgroundResource(R.drawable.art_background)
+                        } else {
+                            artView.background = null
+                        }
+                    } else {
+                        artView.setImageResource(R.drawable.vgmp_logo)
+                        artView.background = null
+                    }
                 } catch (e: Exception) {
                     artView.setImageResource(R.drawable.vgmp_logo)
+                    artView.background = null
                 }
             } else {
                 artView.setImageResource(R.drawable.vgmp_logo)
+                artView.background = null
             }
 
             tracksContainer.visibility = if (expanded) View.VISIBLE else View.GONE
@@ -334,6 +347,9 @@ class GameAdapter(
                 path.endsWith(".okt") -> "OKT"
                 path.endsWith(".dsm") -> "DSM"
                 path.endsWith(".dtm") -> "DTM"
+                path.endsWith(".mid") || path.endsWith(".midi") -> "MIDI"
+                path.endsWith(".rmi") -> "RMI"
+                path.endsWith(".smf") -> "SMF"
                 else -> ""
             }
         }

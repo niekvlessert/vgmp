@@ -147,7 +147,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             // Check if game already exists
             if (!GameLibrary.gameExists(gameName)) {
                 try {
-                    Log.d(TAG, "Auto-downloading $gameName")
                     val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
                     conn.setRequestProperty("User-Agent", "Mozilla/5.0")
                     conn.connectTimeout = 30000
@@ -157,13 +156,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         conn.inputStream.use { input ->
                             GameLibrary.importZip(input, "$gameName.zip")
                         }
-                        Log.d(TAG, "Auto-downloaded $gameName successfully")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to auto-download $gameName", e)
                 }
-            } else {
-                Log.d(TAG, "$gameName already exists, skipping auto-download")
             }
         }
         allGames = GameLibrary.getAllGames()
@@ -181,7 +177,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         input.copyTo(output)
                     }
                 }
-                Log.d(TAG, "Extracted $romFileName to ${destFile.absolutePath}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to extract $romFileName", e)
             }
@@ -252,7 +247,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 if (shouldPlayAfterFocusGain) resumeOrPlay()
                 // Handle delayed focus gain for pending playback
                 pendingPlayback?.let { (game, track) ->
-                    Log.d(TAG, "Audio focus gained after delay, starting playback")
                     pendingPlayback = null
                     serviceScope.launch { startTrackWithFocus(game, track) }
                 }
@@ -367,7 +361,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 return
             }
             if (result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
-                Log.d(TAG, "Audio focus delayed, storing pending playback")
                 pendingPlayback = Pair(game, track)
                 return
             }
@@ -870,8 +863,21 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
         // Get album art for notification - use game art or fallback
         val game = currentGame
-        val largeIcon = if (game?.artPath?.isNotEmpty() == true && File(game.artPath).exists()) {
-            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { getFallbackArt() }
+        val rawBitmap = if (game?.artPath?.isNotEmpty() == true && File(game.artPath).exists()) {
+            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { null }
+        } else null
+        
+        // Crop bitmap to square for notification
+        val largeIcon = if (rawBitmap != null) {
+            // Only crop if not already square
+            if (rawBitmap.width != rawBitmap.height) {
+                val size = minOf(rawBitmap.width, rawBitmap.height)
+                val x = (rawBitmap.width - size) / 2
+                val y = (rawBitmap.height - size) / 2
+                Bitmap.createBitmap(rawBitmap, x, y, size, size)
+            } else {
+                rawBitmap
+            }
         } else {
             getFallbackArt()
         }
@@ -969,8 +975,18 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
         val sourceBitmap = rawBitmap ?: getFallbackArt() ?: return null
 
+        // Crop to square first (only if not already square)
+        val squareBitmap = if (sourceBitmap.width != sourceBitmap.height) {
+            val size = minOf(sourceBitmap.width, sourceBitmap.height)
+            val x = (sourceBitmap.width - size) / 2
+            val y = (sourceBitmap.height - size) / 2
+            Bitmap.createBitmap(sourceBitmap, x, y, size, size)
+        } else {
+            sourceBitmap
+        }
+
         // Scale to 256x256 for Android Auto
-        return Bitmap.createScaledBitmap(sourceBitmap, 256, 256, true)
+        return Bitmap.createScaledBitmap(squareBitmap, 256, 256, true)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -1063,8 +1079,21 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     
     private fun updateMediaSessionMetadata() {
         val game = currentGame ?: return
-        val artBitmap: Bitmap? = if (game.artPath.isNotEmpty() && File(game.artPath).exists()) {
-            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { getFallbackArt() }
+        val rawBitmap: Bitmap? = if (game.artPath.isNotEmpty() && File(game.artPath).exists()) {
+            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { null }
+        } else null
+        
+        // Crop bitmap to square for media session
+        val artBitmap: Bitmap? = if (rawBitmap != null) {
+            // Only crop if not already square
+            if (rawBitmap.width != rawBitmap.height) {
+                val size = minOf(rawBitmap.width, rawBitmap.height)
+                val x = (rawBitmap.width - size) / 2
+                val y = (rawBitmap.height - size) / 2
+                Bitmap.createBitmap(rawBitmap, x, y, size, size)
+            } else {
+                rawBitmap
+            }
         } else {
             getFallbackArt()
         }
@@ -1104,5 +1133,24 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     fun isCurrentTrackSpc(): Boolean {
         val track = currentTrack ?: return false
         return track.filePath.endsWith(".spc", ignoreCase = true)
+    }
+    
+    /**
+     * Check if the current track supports playback speed control.
+     * KSS, tracker formats (MOD, XM, S3M, IT), and MIDI don't support speed control.
+     */
+    fun isSpeedControlSupported(): Boolean {
+        val track = currentTrack ?: return false
+        val path = track.filePath.lowercase()
+        // KSS files
+        if (path.endsWith(".kss")) return false
+        // Tracker formats
+        if (path.endsWith(".mod") || path.endsWith(".xm") || 
+            path.endsWith(".s3m") || path.endsWith(".it") ||
+            path.endsWith(".mptm")) return false
+        // MIDI files
+        if (path.endsWith(".mid") || path.endsWith(".midi") ||
+            path.endsWith(".rmi") || path.endsWith(".smf")) return false
+        return true
     }
 }

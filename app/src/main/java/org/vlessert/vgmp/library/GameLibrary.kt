@@ -1,6 +1,7 @@
 package org.vlessert.vgmp.library
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -16,8 +17,11 @@ private val GME_EXTENSIONS = listOf(".nsf", ".nsfe", ".gbs", ".gym", ".hes", ".a
 // KSS files are now handled by libkss, not libgme
 private val KSS_EXTENSIONS = listOf(".kss", ".mgs", ".bgm", ".opx", ".mpk", ".mbm")
 private val TRACKER_EXTENSIONS = listOf(".mod", ".xm", ".s3m", ".it", ".mptm", ".stm", ".far", ".ult", ".med", ".mtm", ".psm", ".amf", ".okt", ".dsm", ".dtm", ".umx")
-private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS
+// MIDI files are handled by libADLMIDI (OPL3 FM synthesis)
+private val MIDI_EXTENSIONS = listOf(".mid", ".midi", ".rmi", ".smf")
+private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS + MIDI_EXTENSIONS
 private const val TRACKER_GAME_NAME = "Tracker files"
+private const val MIDI_GAME_NAME = "MIDI files"
 
 // Data class for vigamup gameinfo
 data class VigamupGameInfo(
@@ -45,6 +49,7 @@ data class Game(
     val name get() = entity.name
     val system get() = entity.system
     val artPath get() = entity.artPath
+    val soundChips get() = entity.soundChips
 }
 
 /**
@@ -98,13 +103,11 @@ object GameLibrary {
                     
                     // Check if this game already exists
                     if (db.gameDao().searchGames(gameName).isNotEmpty()) {
-                        Log.d(TAG, "Game '$gameName' already exists, skipping bundled asset")
                         continue
                     }
                     
                     // Handle ZIP files differently - they contain multiple tracks
                     if (fileName.endsWith(".zip", ignoreCase = true)) {
-                        Log.d(TAG, "Importing bundled ZIP: $fileName")
                         context.assets.open(assetPath).use { stream ->
                             importZip(stream, fileName)
                         }
@@ -163,7 +166,6 @@ object GameLibrary {
             while (entry != null) {
                 if (!entry.isDirectory) {
                     val name = entry.name.substringAfterLast('/')
-                    Log.d(TAG, "Extracting entry: ${entry.name} -> $name")
                     val outFile = File(gameFolder, sanitizeFilename(name))
                     outFile.outputStream().use { out -> zis.copyTo(out) }
                     
@@ -204,9 +206,6 @@ object GameLibrary {
                 entry = zis.nextEntry
             }
         }
-
-        Log.d(TAG, "Imported $zipName: ${vgmFiles.size} audio files, art=${artFile != null}, m3u=${m3uContent != null}")
-        Log.d(TAG, "Vigamup: ${kssFiles.size} KSS files, ${gameInfoFiles.size} gameinfo, ${trackInfoFiles.size} trackinfo")
 
         if (vgmFiles.isEmpty()) {
             Log.w(TAG, "No audio files found in $zipName")
@@ -266,9 +265,7 @@ object GameLibrary {
         var soundChips = ""
         sortedVgm.forEachIndexed { idx, vgmFile ->
             val durationSamples = try {
-                val samples = VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
-                Log.d(TAG, "Track $idx (${vgmFile.name}): durationSamples=$samples")
-                samples
+                VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
             } catch (e: Exception) { 
                 Log.e(TAG, "Failed to get duration for ${vgmFile.name}", e)
                 -1L 
@@ -457,6 +454,54 @@ object GameLibrary {
         return importedGames.firstOrNull()
     }
     
+    /**
+     * Create a scaled bitmap from art file that fits within max dimensions.
+     * Used for displaying art in UI without modifying original files.
+     */
+    fun loadScaledArt(artPath: String, maxWidth: Int, maxHeight: Int): Bitmap? {
+        if (artPath.isEmpty()) return null
+        try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(artPath, options)
+            
+            val originalWidth = options.outWidth
+            val originalHeight = options.outHeight
+            
+            // Calculate inSampleSize for efficient loading
+            var inSampleSize = 1
+            if (originalWidth > maxWidth || originalHeight > maxHeight) {
+                val halfWidth = originalWidth / 2
+                val halfHeight = originalHeight / 2
+                while (halfWidth / inSampleSize >= maxWidth && halfHeight / inSampleSize >= maxHeight) {
+                    inSampleSize *= 2
+                }
+            }
+            
+            // Decode with sample size
+            val decodeOptions = BitmapFactory.Options().apply { 
+                inSampleSize = inSampleSize 
+            }
+            val bitmap = BitmapFactory.decodeFile(artPath, decodeOptions) ?: return null
+            
+            // Scale to exact dimensions while maintaining aspect ratio
+            val scale = minOf(
+                maxWidth.toFloat() / bitmap.width,
+                maxHeight.toFloat() / bitmap.height,
+                1.0f  // Don't upscale
+            )
+            
+            if (scale < 1.0f) {
+                val scaledWidth = (bitmap.width * scale).toInt()
+                val scaledHeight = (bitmap.height * scale).toInt()
+                return Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
+            }
+            
+            return bitmap
+        } catch (e: Exception) {
+            return null
+        }
+    }
+    
     // Import KSS files without gameinfo (each KSS file is a separate game)
     private suspend fun importKssGames(
         zipName: String,
@@ -512,7 +557,6 @@ object GameLibrary {
             }
             
             val tracksToInclude = (trackRange[0]..trackRange[1]).toList()
-            Log.d(TAG, "KSS file ${kssFile.name}: ${tracksToInclude.size} tracks (${trackRange[0]}-${trackRange[1]})")
             
             // Create track entities
             tracksToInclude.forEachIndexed { idx, trackId ->
@@ -747,6 +791,23 @@ object GameLibrary {
             Log.w(TAG, "Could not get tags from ${file.name}")
         }
         
+        // Fallback system name based on file extension
+        if (systemName.isEmpty()) {
+            val ext = file.extension.lowercase()
+            systemName = when {
+                ext == "nsf" || ext == "nsfe" -> "Famicom (NSF)"
+                ext == "gbs" -> "Game Boy (GBS)"
+                ext == "hes" -> "PC Engine (HES)"
+                ext == "ay" -> "ZX Spectrum (AY)"
+                ext == "sap" -> "Atari ST (SAP)"
+                ext == "gym" -> "Genesis (GYM)"
+                ext == "spc" -> "SNES (SPC)"
+                ext == "kss" || ext == "mgs" || ext == "bgm" || ext == "opx" -> "MSX (KSS)"
+                ext == "vgm" || ext == "vgz" -> "VGM"
+                else -> ""
+            }
+        }
+        
         // Check for existing game
         val existingGame = db.gameDao().findByPath(gameFolder.absolutePath)
         if (existingGame != null) {
@@ -930,7 +991,6 @@ object GameLibrary {
         withContext(Dispatchers.IO) {
             // Check if "Tracker files" game already exists
             if (db.gameDao().searchGames(TRACKER_GAME_NAME).isNotEmpty()) {
-                Log.d(TAG, "Tracker files game already exists, skipping bundled assets")
                 return@withContext
             }
             
@@ -947,6 +1007,126 @@ object GameLibrary {
                     tempFile.delete()
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to load bundled tracker file $assetPath", e)
+                }
+            }
+        }
+    
+    /**
+     * Import a MIDI file into the special "MIDI files" game.
+     * MIDI files are grouped together under a single game entry.
+     */
+    suspend fun importMidiFile(file: File): Game? = withContext(Dispatchers.IO) {
+        try {
+            _importMidiFile(file)
+        } catch (e: Exception) {
+            Log.e(TAG, "importMidiFile failed for ${file.name}", e)
+            null
+        }
+    }
+    
+    private suspend fun _importMidiFile(file: File): Game? {
+        // Get or create the "MIDI files" game entry
+        var midiGame = db.gameDao().searchGames(MIDI_GAME_NAME).firstOrNull()
+        
+        val midiFolder = File(gamesDir, sanitizeFilename(MIDI_GAME_NAME)).also { it.mkdirs() }
+        
+        // Copy file to MIDI folder
+        val destFile = File(midiFolder, file.name)
+        file.copyTo(destFile, overwrite = true)
+        
+        VgmEngine.setSampleRate(44100)
+        
+        // Get title from MIDI file
+        var trackTitle = file.nameWithoutExtension
+        
+        try {
+            if (VgmEngine.open(destFile.absolutePath)) {
+                val tags = VgmEngine.parseTags(VgmEngine.getTags())
+                if (tags.trackEn.isNotEmpty()) trackTitle = tags.trackEn
+                VgmEngine.close()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not get tags from MIDI file ${file.name}")
+        }
+        
+        // Get duration (MIDI files have variable length)
+        val durationSamples = try {
+            VgmEngine.getTrackLengthDirect(destFile.absolutePath)
+        } catch (e: Exception) { 
+            Log.e(TAG, "Failed to get duration for ${destFile.name}", e)
+            -1L 
+        }
+        
+        if (midiGame == null) {
+            // Create new "MIDI files" game
+            val gameEntity = GameEntity(
+                name = MIDI_GAME_NAME,
+                system = "Various",
+                author = "",
+                year = "",
+                folderPath = midiFolder.absolutePath,
+                artPath = "",
+                zipSource = "midi_files"
+            )
+            val gameId = db.gameDao().insertGame(gameEntity)
+            
+            val trackEntity = TrackEntity(
+                id = 0,
+                gameId = gameId,
+                title = trackTitle,
+                filePath = destFile.absolutePath,
+                durationSamples = durationSamples,
+                trackIndex = 0,
+                isFavorite = false
+            )
+            db.trackDao().insertTrack(trackEntity)
+            
+            return Game(gameEntity.copy(id = gameId), listOf(trackEntity), null)
+        } else {
+            // Add to existing "MIDI files" game
+            val existingTracks = db.trackDao().getTracksForGame(midiGame.id)
+            val nextIndex = existingTracks.size
+            
+            val trackEntity = TrackEntity(
+                id = 0,
+                gameId = midiGame.id,
+                title = trackTitle,
+                filePath = destFile.absolutePath,
+                durationSamples = durationSamples,
+                trackIndex = nextIndex,
+                isFavorite = false
+            )
+            db.trackDao().insertTrack(trackEntity)
+            
+            val allTracks = db.trackDao().getTracksForGame(midiGame.id)
+            return Game(midiGame, allTracks, null)
+        }
+    }
+    
+    /**
+     * Load bundled MIDI files from assets on first run.
+     * midiFiles: list of asset paths like "doom1/E1M1.mid"
+     */
+    suspend fun loadBundledMidiFilesIfNeeded(context: Context, midiFiles: List<String>) =
+        withContext(Dispatchers.IO) {
+            // Check if "MIDI files" game already exists
+            if (db.gameDao().searchGames(MIDI_GAME_NAME).isNotEmpty()) {
+                return@withContext
+            }
+            
+            for (assetPath in midiFiles) {
+                try {
+                    val fileName = assetPath.substringAfterLast('/')
+                    val tempFile = File(context.cacheDir, fileName)
+                    context.assets.open(assetPath).use { input ->
+                        tempFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    importMidiFile(tempFile)
+                    tempFile.delete()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load bundled MIDI file $assetPath", e)
                 }
             }
         }

@@ -20,7 +20,7 @@
             android:id="@+id/iv_pack_art"
             android:layout_width="80dp"
             android:layout_height="80dp"
-            android:scaleType="centerCrop"
+            android:scaleType="fitCenter"
             android:src="@drawable/vgmp_logo"
             android:contentDescription="Pack art" />
 

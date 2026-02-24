@@ -121,13 +121,11 @@ class VgmRipsSearchFragment : DialogFragment() {
             
             // Load image on IO thread
             val imageUrl = pack.imageUrl
-            Log.d(TAG, "Loading image for ${pack.title}: $imageUrl")
             if (imageUrl != null) {
                 viewLifecycleOwner.lifecycleScope.launch {
                     try {
                         withContext(Dispatchers.IO) {
                             val url = URL(imageUrl)
-                            Log.d(TAG, "Opening connection to: $imageUrl")
                             val conn = url.openConnection()
                             conn.connectTimeout = 10000
                             conn.readTimeout = 10000
@@ -135,10 +133,8 @@ class VgmRipsSearchFragment : DialogFragment() {
                             withContext(Dispatchers.Main) {
                                 if (bitmap != null) {
                                     ivArt.setImageBitmap(bitmap)
-                                    Log.d(TAG, "Image loaded successfully for ${pack.title}")
                                 } else {
                                     ivArt.setImageResource(R.drawable.vgmp_logo)
-                                    Log.w(TAG, "Failed to decode bitmap for ${pack.title}")
                                 }
                             }
                         }
@@ -177,15 +173,13 @@ class VgmRipsSearchFragment : DialogFragment() {
                             progressBar.visibility = View.GONE
                             btnDownload.isEnabled = true
                             if (info.state.name == "SUCCEEDED") {
-                                val gameName = info.outputData.getString(DownloadWorker.KEY_GAME_NAME) ?: ""
-                                tvStatus.text = "✓ Downloaded: $gameName"
+                                tvStatus.text = "✓ Music installed"
                                 // Refresh the library and service games list
                                 viewLifecycleOwner.lifecycleScope.launch {
                                     try {
                                         GameLibrary.init(requireContext())
                                         (activity as? MainActivity)?.getService()?.refreshGames()
                                         (activity as? MainActivity)?.refreshLibrary()
-                                        Log.d(TAG, "Library refreshed after download")
                                     } catch (e: Exception) {
                                         Log.e(TAG, "Failed to refresh library", e)
                                     }

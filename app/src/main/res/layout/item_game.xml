@@ -6,23 +6,23 @@
     android:orientation="vertical"
     android:background="@color/vgmp_surface"
     android:layout_marginHorizontal="8dp"
-    android:layout_marginVertical="4dp"
-    android:paddingBottom="4dp">
+    android:layout_marginVertical="2dp"
+    android:paddingBottom="2dp">
 
     <!-- Game header row -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="10dp"
+        android:padding="3dp"
         android:gravity="center_vertical">
 
         <!-- Album art -->
         <ImageView
             android:id="@+id/iv_art"
-            android:layout_width="60dp"
-            android:layout_height="60dp"
-            android:scaleType="centerCrop"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:scaleType="fitCenter"
             android:src="@drawable/vgmp_logo"
             android:contentDescription="Album art" />
 

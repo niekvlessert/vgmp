@@ -1,0 +1,23 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    
+    <!-- Speed gauge outline -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM12,20c-4.41,0 -8,-3.59 -8,-8s3.59,-8 8,-8 8,3.59 8,8 -3.59,8 -8,8z"/>
+    
+    <!-- Speed needle pointing to ~75% -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,6v6l4.5,4.5 1.41,-1.41L14,11.17V6z"/>
+    
+    <!-- Small speed indicator marks -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M7.5,7.5l1.5,1.5M15,7.5l-1.5,1.5M6,12h2M16,12h2M7.5,16.5l1.5,-1.5M15,16.5l-1.5,-1.5"
+        android:strokeWidth="1"
+        android:strokeColor="#FFFFFF"/>
+</vector>

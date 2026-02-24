@@ -73,7 +73,6 @@ object VgmRipsRepository {
             }
             
             packs = packList
-            Log.d(TAG, "Loaded ${packList.size} packs from dump.json")
             packList
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load dump.json", e)

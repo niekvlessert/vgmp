@@ -96,6 +96,10 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libopenmpt openmpt_build)
 # We use linker option --allow-multiple-definition to resolve this
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libkss kss_build)
 
+# Include libADLMIDI for MIDI files (OPL3 FM synthesis)
+set(LIBADLMIDI_STATIC ON CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libADLMIDI adlmidi_build)
+
 # JNI glue shared library
 add_library(vgmplayer SHARED vgmplayer_jni.cpp)
 
@@ -107,6 +111,7 @@ target_include_directories(vgmplayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/libkss
     ${CMAKE_CURRENT_SOURCE_DIR}/libkss/src
     ${CMAKE_CURRENT_SOURCE_DIR}/libkss/modules
+    ${CMAKE_CURRENT_SOURCE_DIR}/libADLMIDI/include
 )
 
 target_link_libraries(vgmplayer
@@ -116,6 +121,7 @@ target_link_libraries(vgmplayer
     gme_static
     openmpt_static
     kss
+    ADLMIDI_static
     log
     android
     z

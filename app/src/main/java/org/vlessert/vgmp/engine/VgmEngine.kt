@@ -60,6 +60,10 @@ object VgmEngine {
     @JvmStatic external fun nSetEndlessLoop(enabled: Boolean)
     @JvmStatic external fun nGetEndlessLoop(): Boolean
 
+    // Playback speed control
+    @JvmStatic external fun nSetPlaybackSpeed(speed: Double)
+    @JvmStatic external fun nGetPlaybackSpeed(): Double
+
     // KSS direct track info (without opening as active track)
     @JvmStatic external fun nGetKssTrackCountDirect(path: String): Int
     @JvmStatic external fun nGetKssTrackRange(path: String): IntArray  // Returns [minTrack, maxTrack]
@@ -95,6 +99,10 @@ object VgmEngine {
     // Endless loop mode
     suspend fun setEndlessLoop(enabled: Boolean) = mutex.withLock { nSetEndlessLoop(enabled) }
     suspend fun getEndlessLoop(): Boolean = mutex.withLock { nGetEndlessLoop() }
+    
+    // Playback speed control
+    suspend fun setPlaybackSpeed(speed: Double) = mutex.withLock { nSetPlaybackSpeed(speed) }
+    suspend fun getPlaybackSpeed(): Double = mutex.withLock { nGetPlaybackSpeed() }
     
     // KSS direct track info
     suspend fun getKssTrackCountDirect(path: String): Int = mutex.withLock { nGetKssTrackCountDirect(path) }

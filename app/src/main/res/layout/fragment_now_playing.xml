@@ -28,7 +28,7 @@
                 android:layout_width="200dp"
                 android:layout_height="200dp"
                 android:layout_gravity="center_horizontal"
-                android:scaleType="centerCrop"
+                android:scaleType="fitCenter"
                 android:src="@drawable/vgmp_logo"
                 android:contentDescription="Album art" />
 
@@ -238,6 +238,16 @@
                     android:background="?attr/selectableItemBackgroundBorderless"
                     android:tint="@color/vgmp_text_secondary"
                     android:contentDescription="Loop" />
+                
+                <ImageButton
+                    android:id="@+id/btn_speed"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="16dp"
+                    android:src="@drawable/ic_speed"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:tint="@color/vgmp_text_secondary"
+                    android:contentDescription="Playback speed" />
             </LinearLayout>
 
             <!-- Chip Volumes divider -->
