@@ -13,12 +13,11 @@ class VgmApplication : Application() {
         super.onCreate()
         GameLibrary.init(this)
         
-        // Load bundled audio files on first run (NSF, SPC, KSS, etc.)
+        // Load bundled audio files on first run (NSF, SPC, etc.)
         applicationScope.launch {
             GameLibrary.loadBundledAudioFilesIfNeeded(this@VgmApplication, listOf(
                 "Shovel_Knight_Music.nsf",
-                "Plok.zip",
-                "vigamup_kss_Konami-SCC-Collection.zip"
+                "Plok.zip"
             ))
         }
         

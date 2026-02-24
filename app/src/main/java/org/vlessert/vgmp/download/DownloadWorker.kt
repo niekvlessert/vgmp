@@ -62,8 +62,15 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 GameLibrary.init(applicationContext)
                 val game = GameLibrary.importZip(buffered, zipName)
                 if (game != null) {
-                    setProgress(workDataOf(KEY_PROGRESS to 100, KEY_STATUS to "Done: ${game.name}"))
-                    Result.success(workDataOf(KEY_GAME_NAME to game.name))
+                    // For KSS collections, the game name might be just the first game
+                    // Show the zip name instead for clarity
+                    val displayName = if (zipName.contains("Konami-SCC-Collection", ignoreCase = true)) {
+                        "Konami SCC Collection"
+                    } else {
+                        game.name
+                    }
+                    setProgress(workDataOf(KEY_PROGRESS to 100, KEY_STATUS to "Done: $displayName"))
+                    Result.success(workDataOf(KEY_GAME_NAME to displayName))
                 } else {
                     Result.failure(workDataOf(KEY_STATUS to "No VGM files found in ZIP"))
                 }
@@ -104,6 +111,12 @@ data class DownloadSource(
 
 object DownloadSources {
     val presets = listOf(
+        DownloadSource(
+            name = "Konami SCC Collection (KSS)",
+            description = "MSX music from Konami games",
+            url = "https://vlessert.nl/vigamup/vigamup_kss_Konami-SCC-Collection.zip",
+            fileType = ".zip"
+        ),
         DownloadSource(
             name = "Quarth (MSX2)",
             description = "Test MSX2 VGM zip",

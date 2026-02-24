@@ -88,8 +88,16 @@ class DownloadDialogFragment : DialogFragment() {
                                 progressBar.visibility = View.GONE
                                 btnDownload.isEnabled = true
                                 if (info.state.name == "SUCCEEDED") {
-                                    val gameName = info.outputData.getString(DownloadWorker.KEY_GAME_NAME) ?: ""
-                                    tvStatus.text = "✓ Downloaded: $gameName"
+                                    tvStatus.text = "✓ Music installed"
+                                    // Refresh the library to show new games
+                                    lifecycleScope.launch {
+                                        try {
+                                            (activity as? MainActivity)?.getService()?.refreshGames()
+                                            (activity as? MainActivity)?.refreshLibrary()
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("DownloadDialog", "Failed to refresh library", e)
+                                        }
+                                    }
                                 } else {
                                     tvStatus.text = "✗ Failed: ${info.outputData.getString(DownloadWorker.KEY_STATUS)}"
                                 }
