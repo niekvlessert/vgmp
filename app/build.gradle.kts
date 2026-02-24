@@ -108,6 +108,9 @@ dependencies {
     // Lifecycle
     implementation(libs.lifecycle.viewmodel.ktx)
     implementation(libs.lifecycle.livedata.ktx)
+    
+    // RAR extraction for RSN files (SPC archives)
+    implementation("com.github.junrar:junrar:7.5.5")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

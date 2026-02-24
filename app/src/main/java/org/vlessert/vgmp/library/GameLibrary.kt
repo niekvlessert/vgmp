@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
+import com.github.junrar.Archive
+import com.github.junrar.rarfile.FileHeader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.vlessert.vgmp.engine.VgmEngine
@@ -19,7 +21,9 @@ private val KSS_EXTENSIONS = listOf(".kss", ".mgs", ".bgm", ".opx", ".mpk", ".mb
 private val TRACKER_EXTENSIONS = listOf(".mod", ".xm", ".s3m", ".it", ".mptm", ".stm", ".far", ".ult", ".med", ".mtm", ".psm", ".amf", ".okt", ".dsm", ".dtm", ".umx")
 // MIDI files are handled by libADLMIDI (OPL3 FM synthesis)
 private val MIDI_EXTENSIONS = listOf(".mid", ".midi", ".rmi", ".smf")
-private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS + MIDI_EXTENSIONS
+// RSN files are RAR archives containing SPC files
+private val RSN_EXTENSIONS = listOf(".rsn")
+private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS + MIDI_EXTENSIONS + RSN_EXTENSIONS
 private const val TRACKER_GAME_NAME = "Tracker files"
 private const val MIDI_GAME_NAME = "MIDI files"
 
@@ -183,6 +187,14 @@ object GameLibrary {
                         name.endsWith(".png", true) -> {
                             artFiles[baseName] = outFile
                             artFile = outFile  // Also set for non-vigamup format
+                        }
+                        // RSN files are RAR archives containing SPC files - extract them
+                        name.endsWith(".rsn", true) -> {
+                            try {
+                                extractRsnFile(outFile, gameFolder, vgmFiles)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to extract RSN file: ${outFile.name}", e)
+                            }
                         }
                         ALL_AUDIO_EXTENSIONS.any { ext -> name.endsWith(ext, true) } ->
                             vgmFiles.add(outFile)
@@ -1130,4 +1142,40 @@ object GameLibrary {
                 }
             }
         }
+    
+    /**
+     * Extract SPC files from an RSN (RAR) archive.
+     * RSN files are RAR archives containing SPC files for SNES music.
+     */
+    private fun extractRsnFile(rsnFile: File, gameFolder: File, vgmFiles: MutableList<File>) {
+        try {
+            val archive = Archive(rsnFile)
+            var header: FileHeader? = archive.nextFileHeader()
+            
+            while (header != null) {
+                if (!header.isDirectory) {
+                    val name = header.fileName.substringAfterLast('/')
+                    
+                    // Only extract SPC files
+                    if (name.endsWith(".spc", ignoreCase = true)) {
+                        val outFile = File(gameFolder, sanitizeFilename(name))
+                        outFile.outputStream().use { out ->
+                            archive.extractFile(header, out)
+                        }
+                        vgmFiles.add(outFile)
+                        Log.d(TAG, "Extracted SPC from RSN: ${outFile.name}")
+                    }
+                }
+                header = archive.nextFileHeader()
+            }
+            
+            archive.close()
+            
+            // Delete the RSN file after extraction to save space
+            rsnFile.delete()
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract RSN file: ${rsnFile.name}", e)
+        }
+    }
 }

@@ -116,12 +116,6 @@ object DownloadSources {
             description = "MSX music from Konami games",
             url = "https://vlessert.nl/vigamup/vigamup_kss_Konami-SCC-Collection.zip",
             fileType = ".zip"
-        ),
-        DownloadSource(
-            name = "Quarth (MSX2)",
-            description = "Test MSX2 VGM zip",
-            url = "https://vgmrips.net/files/Computers/MSX/Quarth_%28MSX2%29.zip",
-            fileType = ".zip"
         )
     )
 }

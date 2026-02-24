@@ -64,6 +64,9 @@ static int gGmeTrackCount = 0;
 static int gKssTrackIndex = 0;
 static int gKssTrackCount = 0;
 
+// Endless loop mode - disable track end detection for seamless SPC looping
+static bool gEndlessLoopMode = false;
+
 // FFT / Spectrum State
 #define FFT_SIZE 1024
 static float gFftRingBuffer[FFT_SIZE];
@@ -358,6 +361,13 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       return JNI_FALSE;
     }
     
+    // Apply endless loop settings after starting track
+    // For SPC files, this enables true seamless infinite looping
+    if (gEndlessLoopMode) {
+      gme_set_fade_msecs(gGmePlayer, -1, 0);  // -1 = disable fade entirely
+      gme_ignore_silence(gGmePlayer, 1);       // disable silence-based end detection
+    }
+    
     LOGD("nOpen: libgme success, %d tracks, sampleRate=%u", gGmeTrackCount, gSampleRate);
     return JNI_TRUE;
   }
@@ -577,9 +587,6 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nStop(JNIEnv *env, jclass cls) {
   // libgme doesn't have a separate stop function
 }
 
-// Endless loop mode - disable track end detection
-static bool gEndlessLoopMode = false;
-
 JNIEXPORT jboolean JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
   // In endless loop mode, never report track as ended
@@ -619,8 +626,15 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetEndlessLoop(
   gEndlessLoopMode = (enabled == JNI_TRUE);
   
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
-    // For GME, ignore silence to prevent track end detection
-    gme_ignore_silence(gGmePlayer, enabled ? 1 : 0);
+    if (gEndlessLoopMode) {
+      // For SPC files, enable true seamless infinite looping:
+      gme_set_fade_msecs(gGmePlayer, -1, 0);  // -1 = disable fade entirely
+      gme_ignore_silence(gGmePlayer, 1);       // disable silence-based end detection
+    } else {
+      // Restore normal behavior
+      gme_set_fade_msecs(gGmePlayer, 0, 8000); // normal fade
+      gme_ignore_silence(gGmePlayer, 0);       // enable silence detection
+    }
     // Also disable autoload playback limit - this prevents SPC files from
     // automatically fading out based on their embedded track length metadata
     gme_set_autoload_playback_limit(gGmePlayer, enabled ? 0 : 1);
@@ -1446,6 +1460,14 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetTrack(
         return JNI_FALSE;
       }
       gGmeTrackIndex = trackIndex;
+      
+      // Apply endless loop settings after starting track
+      // For SPC files, this enables true seamless infinite looping
+      if (gEndlessLoopMode) {
+        gme_set_fade_msecs(gGmePlayer, -1, 0);  // -1 = disable fade entirely
+        gme_ignore_silence(gGmePlayer, 1);       // disable silence-based end detection
+      }
+      
       return JNI_TRUE;
     }
   }
