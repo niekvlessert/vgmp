@@ -46,6 +46,11 @@ class DownloadDialogFragment : DialogFragment() {
             VgmRipsSearchFragment.newInstance().show(parentFragmentManager, "vgmrips_search")
         }
         
+        // Add SNES Music Archive button
+        binding.btnSnesMusic.setOnClickListener {
+            SnesMusicWebViewFragment.newInstance().show(parentFragmentManager, "snes_music_webview")
+        }
+        
         populateSources()
     }
 

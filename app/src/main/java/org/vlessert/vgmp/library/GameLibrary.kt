@@ -1178,4 +1178,176 @@ object GameLibrary {
             Log.e(TAG, "Failed to extract RSN file: ${rsnFile.name}", e)
         }
     }
+    
+    /**
+     * Import an RSN file (RAR archive containing SPC files) directly.
+     * This is used when downloading RSN files from the SNES Music Archive.
+     */
+    suspend fun importRsn(inputStream: InputStream, rsnName: String): Game? =
+        withContext(Dispatchers.IO) {
+            try {
+                _importRsn(inputStream, rsnName)
+            } catch (e: Exception) {
+                Log.e(TAG, "importRsn failed for $rsnName", e)
+                null
+            }
+        }
+    
+    private suspend fun _importRsn(inputStream: InputStream, rsnName: String): Game? {
+        Log.d(TAG, "Starting RSN import for: $rsnName")
+        
+        // Use RSN stem as folder name
+        val folderName = rsnName.removeSuffix(".rsn").removeSuffix(".RSN")
+        val gameFolder = File(gamesDir, sanitizeFilename(folderName)).also { it.mkdirs() }
+        Log.d(TAG, "Game folder: ${gameFolder.absolutePath}")
+        
+        // Save the RSN file temporarily
+        val tempRsnFile = File(gameFolder, "temp.rsn")
+        inputStream.use { input ->
+            tempRsnFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        Log.d(TAG, "Saved temp RSN file: ${tempRsnFile.absolutePath}, size: ${tempRsnFile.length()} bytes")
+        
+        // Extract SPC files from the RSN using Junrar.extract()
+        val vgmFiles = mutableListOf<File>()
+        var gameName = folderName
+        var authorName = ""
+        var yearStr = ""
+        var systemName = "Super Nintendo"
+        
+        try {
+            Log.d(TAG, "Extracting RSN archive with Junrar.extract()...")
+            // Use the simpler Junrar.extract method
+            com.github.junrar.Junrar.extract(tempRsnFile, gameFolder)
+            
+            // Now scan the extracted files
+            gameFolder.listFiles()?.forEach { file ->
+                val name = file.name.lowercase()
+                Log.d(TAG, "Found extracted file: ${file.name}")
+                
+                when {
+                    name.endsWith(".spc") -> {
+                        vgmFiles.add(file)
+                        Log.d(TAG, "Found SPC file: ${file.name}")
+                    }
+                    name == "info.txt" -> {
+                        // Parse info.txt for game details
+                        try {
+                            val lines = file.readText().lines()
+                            lines.forEach { line ->
+                                when {
+                                    line.startsWith("Game:", ignoreCase = true) -> 
+                                        gameName = line.substringAfter(":").trim()
+                                    line.startsWith("Artist:", ignoreCase = true) || 
+                                        line.startsWith("Composer:", ignoreCase = true) -> 
+                                        authorName = line.substringAfter(":").trim()
+                                    line.startsWith("Year:", ignoreCase = true) || 
+                                        line.startsWith("Date:", ignoreCase = true) -> 
+                                        yearStr = line.substringAfter(":").trim()
+                                }
+                            }
+                            Log.d(TAG, "Parsed info.txt: game=$gameName, author=$authorName, year=$yearStr")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to parse info.txt", e)
+                        }
+                    }
+                }
+            }
+            
+            Log.d(TAG, "RSN extraction complete, found ${vgmFiles.size} SPC files")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract RSN file: $rsnName", e)
+        }
+        
+        // Delete the temp RSN file
+        tempRsnFile.delete()
+        
+        if (vgmFiles.isEmpty()) {
+            Log.w(TAG, "No SPC files found in RSN: $rsnName")
+            return null
+        }
+        
+        // Sort SPC files by name
+        val sortedVgm = vgmFiles.sortedBy { it.name }
+        
+        // Get tags from first track (may override info.txt values)
+        VgmEngine.setSampleRate(44100)
+        val trackEntities = mutableListOf<TrackEntity>()
+        
+        // Insert game into DB first (need ID for tracks)
+        val existingGame = db.gameDao().findByPath(gameFolder.absolutePath)
+        if (existingGame != null) {
+            // Re-use existing game entry
+            val tracks = db.trackDao().getTracksForGame(existingGame.id)
+            return Game(existingGame, tracks, null)
+        }
+        
+        val tempGameEntity = GameEntity(
+            name = gameName, system = systemName, author = authorName, year = yearStr,
+            folderPath = gameFolder.absolutePath,
+            artPath = "",
+            zipSource = rsnName
+        )
+        val gameId = db.gameDao().insertGame(tempGameEntity)
+        
+        // Scan tracks for duration + tags
+        sortedVgm.forEachIndexed { idx, vgmFile ->
+            val durationSamples = try {
+                VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to get duration for ${vgmFile.name}", e)
+                0L
+            }
+            
+            // Get tags from first track only (may override info.txt values)
+            if (idx == 0) {
+                try {
+                    if (VgmEngine.open(vgmFile.absolutePath)) {
+                        val tags = VgmEngine.parseTags(VgmEngine.getTags())
+                        // Use English game name, fallback to Japanese, fallback to info.txt/folder name
+                        if (tags.gameEn.isNotEmpty()) gameName = tags.gameEn
+                        else if (tags.gameJp.isNotEmpty()) gameName = tags.gameJp
+                        // Use English system name, fallback to Japanese
+                        if (tags.systemEn.isNotEmpty()) systemName = tags.systemEn
+                        else if (tags.systemJp.isNotEmpty()) systemName = tags.systemJp
+                        // Use English author name, fallback to Japanese, fallback to info.txt
+                        if (tags.authorEn.isNotEmpty()) authorName = tags.authorEn
+                        else if (tags.authorJp.isNotEmpty()) authorName = tags.authorJp
+                        // Use date from tags if available
+                        if (tags.date.isNotEmpty()) yearStr = tags.date
+                        
+                        VgmEngine.close()
+                    }
+                } catch (e: Exception) { Log.w(TAG, "Could not get tags from ${vgmFile.name}") }
+            }
+            
+            val trackTitle = vgmFile.nameWithoutExtension
+            
+            val trackEntity = TrackEntity(
+                gameId = gameId,
+                trackIndex = idx,
+                filePath = vgmFile.absolutePath,
+                title = trackTitle,
+                durationSamples = durationSamples
+            )
+            trackEntities.add(trackEntity)
+            db.trackDao().insertTrack(trackEntity)
+        }
+        
+        // Update game with final info
+        val finalGameEntity = GameEntity(
+            id = gameId,
+            name = gameName, system = systemName, author = authorName, year = yearStr,
+            folderPath = gameFolder.absolutePath,
+            artPath = "",
+            zipSource = rsnName,
+            soundChips = "SPC"
+        )
+        db.gameDao().updateGame(finalGameEntity)
+        
+        Log.d(TAG, "Imported RSN: $gameName with ${trackEntities.size} tracks")
+        return Game(finalGameEntity, trackEntities, null)
+    }
 }
