@@ -30,16 +30,22 @@
 // libopenmpt for tracker formats (MOD, XM, S3M, IT, etc.)
 #include "libopenmpt/libopenmpt.h"
 
+// libkss for KSS format (MSX music files)
+#include "kssplay.h"
+#include "kss/kss.h"
+
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "VgmJNI", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VgmJNI", __VA_ARGS__)
 
 // Player type enumeration
-enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT };
+enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT, LIBKSS };
 
 static PlayerType gPlayerType = PlayerType::NONE;
 static VGMPlayer *gVgmPlayer = nullptr;
 static Music_Emu *gGmePlayer = nullptr;
 static openmpt_module *gOpenmptModule = nullptr;
+static KSS *gKss = nullptr;
+static KSSPLAY *gKssPlay = nullptr;
 static DATA_LOADER *gLoader = nullptr;
 static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
@@ -49,6 +55,10 @@ static std::string gRomPath = "";
 // Current track index for libgme (NSF can have multiple tracks)
 static int gGmeTrackIndex = 0;
 static int gGmeTrackCount = 0;
+
+// Current track index for libkss (KSS can have multiple tracks)
+static int gKssTrackIndex = 0;
+static int gKssTrackCount = 0;
 
 // FFT / Spectrum State
 #define FFT_SIZE 1024
@@ -118,16 +128,36 @@ static bool isGmeFormat(const char *path) {
     lowerExt[i] = tolower(ext[i]);
   }
   
-  // libgme supported formats
+  // libgme supported formats (KSS removed - now using libkss)
   return (strcmp(lowerExt, "nsf") == 0 ||
           strcmp(lowerExt, "nsfe") == 0 ||
           strcmp(lowerExt, "gbs") == 0 ||
           strcmp(lowerExt, "gym") == 0 ||
           strcmp(lowerExt, "hes") == 0 ||
-          strcmp(lowerExt, "kss") == 0 ||
           strcmp(lowerExt, "ay") == 0 ||
           strcmp(lowerExt, "sap") == 0 ||
           strcmp(lowerExt, "spc") == 0);
+}
+
+// Check if file extension is KSS format (MSX music)
+static bool isKssFormat(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext) return false;
+  ext++; // skip the dot
+  
+  // Convert to lowercase for comparison
+  char lowerExt[8] = {0};
+  for (int i = 0; ext[i] && i < 7; i++) {
+    lowerExt[i] = tolower(ext[i]);
+  }
+  
+  // KSS and related MSX formats
+  return (strcmp(lowerExt, "kss") == 0 ||
+          strcmp(lowerExt, "mgs") == 0 ||
+          strcmp(lowerExt, "bgm") == 0 ||
+          strcmp(lowerExt, "opx") == 0 ||
+          strcmp(lowerExt, "mpk") == 0 ||
+          strcmp(lowerExt, "mbm") == 0);
 }
 
 // Check if file extension is a tracker format supported by libopenmpt
@@ -195,9 +225,21 @@ static void cleanup() {
     gOpenmptModule = nullptr;
   }
   
+  // Cleanup libkss
+  if (gKssPlay) {
+    KSSPLAY_delete(gKssPlay);
+    gKssPlay = nullptr;
+  }
+  if (gKss) {
+    KSS_delete(gKss);
+    gKss = nullptr;
+  }
+  
   gPlayerType = PlayerType::NONE;
   gGmeTrackIndex = 0;
   gGmeTrackCount = 0;
+  gKssTrackIndex = 0;
+  gKssTrackCount = 0;
   
   if (gLoader) {
     DataLoader_Deinit(gLoader);
@@ -288,6 +330,80 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     }
     
     LOGD("nOpen: libgme success, %d tracks, sampleRate=%u", gGmeTrackCount, gSampleRate);
+    return JNI_TRUE;
+  }
+
+  // Check if this is a KSS format for libkss
+  if (isKssFormat(path)) {
+    LOGD("Detected KSS format: %s", path);
+    
+    // Read the entire file into memory for libkss
+    FILE *f = fopen(path, "rb");
+    
+    if (!f) {
+      LOGE("Failed to open KSS file: %s", path);
+      env->ReleaseStringUTFChars(jpath, path);
+      return JNI_FALSE;
+    }
+    
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    LOGD("KSS file size: %ld bytes", fileSize);
+    
+    std::vector<uint8_t> fileData(fileSize);
+    if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
+      LOGE("Failed to read KSS file");
+      fclose(f);
+      env->ReleaseStringUTFChars(jpath, path);
+      return JNI_FALSE;
+    }
+    fclose(f);
+    
+    // Get filename for KSS_bin2kss (it uses filename for MBM detection)
+    const char *filename = strrchr(path, '/');
+    filename = filename ? filename + 1 : path;
+    
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    // Log first 16 bytes for debugging
+    LOGD("KSS header: %02X %02X %02X %02X %02X %02X %02X %02X", 
+         fileData[0], fileData[1], fileData[2], fileData[3],
+         fileData[4], fileData[5], fileData[6], fileData[7]);
+    
+    // Create KSS object using KSS_bin2kss which properly parses the header
+    // KSS_bin2kss handles KSCC, KSSX, MGS, BGM, OPX, MPK, MBM formats
+    gKss = KSS_bin2kss(fileData.data(), fileSize, filename);
+    if (!gKss) {
+      LOGE("KSS_bin2kss failed");
+      return JNI_FALSE;
+    }
+    LOGD("KSS_bin2kss success, type=%d, mode=%d", gKss->type, gKss->mode);
+    
+    // Create KSSPLAY object
+    gKssPlay = KSSPLAY_new(gSampleRate, 2, 16);  // stereo, 16-bit
+    if (!gKssPlay) {
+      LOGE("KSSPLAY_new failed");
+      KSS_delete(gKss);
+      gKss = nullptr;
+      return JNI_FALSE;
+    }
+    
+    // Set KSS data to player
+    int setDataResult = KSSPLAY_set_data(gKssPlay, gKss);
+    LOGD("KSSPLAY_set_data result: %d", setDataResult);
+    
+    // Get track range
+    gKssTrackCount = gKss->trk_max - gKss->trk_min + 1;
+    if (gKssTrackCount < 1) gKssTrackCount = 1;
+    gKssTrackIndex = gKss->trk_min;
+    
+    // Reset and start first track
+    KSSPLAY_reset(gKssPlay, gKssTrackIndex, 0);  // track, cpu_speed=0 (auto)
+    
+    gPlayerType = PlayerType::LIBKSS;
+    LOGD("nOpen: libkss success, %d tracks (min=%d, max=%d), sampleRate=%u, fmpac=%d, sn76489=%d", 
+         gKssTrackCount, gKss->trk_min, gKss->trk_max, gSampleRate, gKss->fmpac, gKss->sn76489);
     return JNI_TRUE;
   }
 
@@ -420,6 +536,10 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
     // openmpt doesn't have a built-in "ended" check, so we rely on position
     return JNI_FALSE;  // Tracker files typically loop forever
   }
+  if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
+    // KSS files can detect stop via KSSPLAY_get_stop_flag
+    return KSSPLAY_get_stop_flag(gKssPlay) ? JNI_TRUE : JNI_FALSE;
+  }
   return JNI_TRUE;
 }
 
@@ -476,6 +596,19 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
     // Return a reasonable default (3 minutes)
     return (jlong)180 * gSampleRate;
   }
+  if (gPlayerType == PlayerType::LIBKSS && gKss) {
+    // KSS files may have info about track duration
+    // Check if current track has info
+    if (gKss->info && gKss->info_num > 0) {
+      for (uint16_t i = 0; i < gKss->info_num; i++) {
+        if (gKss->info[i].song == gKssTrackIndex && gKss->info[i].time_in_ms > 0) {
+          return (jlong)gKss->info[i].time_in_ms * gSampleRate / 1000;
+        }
+      }
+    }
+    // Default to 3 minutes for KSS files
+    return (jlong)180 * gSampleRate;
+  }
   return 0;
 }
 
@@ -494,6 +627,12 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
     double seconds = openmpt_module_get_position_seconds(gOpenmptModule);
     return (jlong)(seconds * gSampleRate);
   }
+  if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
+    // KSS doesn't have a direct position function
+    // We track position via decoded_length which is updated during calc
+    // Return 0 for now - proper position tracking would need a timer
+    return 0;
+  }
   return 0;
 }
 
@@ -510,6 +649,7 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
     double seconds = (double)samplePos / gSampleRate;
     openmpt_module_set_position_seconds(gOpenmptModule, seconds);
   }
+  // KSS doesn't support seeking - would need to reset and render silent
 }
 
 /**
@@ -574,6 +714,24 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
   } else if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
     // libopenmpt outputs stereo interleaved
     written = (jint)openmpt_module_read_interleaved_stereo(gOpenmptModule, gSampleRate, frames, dst);
+    
+    // Feed mono samples to FFT ring buffer
+    for (jint i = 0; i < written; i++) {
+      float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+      gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+      gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+    }
+  } else if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
+    // libkss outputs stereo interleaved 16-bit
+    KSSPLAY_calc(gKssPlay, dst, frames);
+    written = frames;
+    
+    // Debug: log first few samples occasionally
+    static int kssLogCounter = 0;
+    if (kssLogCounter++ % 500 == 0) {
+      LOGD("KSS samples: L=%d R=%d, stop_flag=%d", 
+           dst[0], dst[1], KSSPLAY_get_stop_flag(gKssPlay));
+    }
     
     // Feed mono samples to FFT ring buffer
     for (jint i = 0; i < written; i++) {
@@ -900,6 +1058,90 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     return env->NewStringUTF(s.c_str());
   }
   
+  // Handle KSS format via libkss
+  if (gPlayerType == PlayerType::LIBKSS && gKss) {
+    std::string s;
+    
+    // TITLE - get from KSS title or track info
+    s += "TITLE";
+    s += "|||";
+    const char *kssTitle = KSS_get_title(gKss);
+    if (kssTitle && kssTitle[0]) {
+      s += kssTitle;
+    } else if (gKss->info && gKss->info_num > 0) {
+      // Try to get track-specific title
+      for (uint16_t i = 0; i < gKss->info_num; i++) {
+        if (gKss->info[i].song == gKssTrackIndex) {
+          s += gKss->info[i].title;
+          break;
+        }
+      }
+    }
+    s += "|||";
+    
+    // TITLE-JPN
+    s += "TITLE-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // GAME - use KSS title as game name
+    s += "GAME";
+    s += "|||";
+    s += kssTitle ? kssTitle : "";
+    s += "|||";
+    
+    // GAME-JPN
+    s += "GAME-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // SYSTEM - MSX or Sega Master System
+    s += "SYSTEM";
+    s += "|||";
+    if (gKss->mode == 0) {
+      s += "MSX";
+    } else if (gKss->mode == 1) {
+      s += "Sega Master System";
+    } else if (gKss->mode == 2) {
+      s += "Sega Game Gear";
+    } else {
+      s += "MSX";  // Default
+    }
+    s += "|||";
+    
+    // SYSTEM-JPN
+    s += "SYSTEM-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // ARTIST
+    s += "ARTIST";
+    s += "|||";
+    s += "|||";
+    
+    // ARTIST-JPN
+    s += "ARTIST-JPN";
+    s += "|||";
+    s += "|||";
+    
+    // DATE
+    s += "DATE";
+    s += "|||";
+    s += "|||";
+    
+    // ENCODED_BY
+    s += "ENCODED_BY";
+    s += "|||";
+    s += "|||";
+    
+    // COMMENT
+    s += "COMMENT";
+    s += "|||";
+    s += "|||";
+    
+    return env->NewStringUTF(s.c_str());
+  }
+  
   return env->NewStringUTF("");
 }
 
@@ -1058,6 +1300,9 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackCount(
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     return gGmeTrackCount;
   }
+  if (gPlayerType == PlayerType::LIBKSS && gKss) {
+    return gKssTrackCount;
+  }
   // VGM files typically have 1 track
   return 1;
 }
@@ -1076,20 +1321,38 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetTrack(
       return JNI_TRUE;
     }
   }
+  if (gPlayerType == PlayerType::LIBKSS && gKssPlay && gKss) {
+    // KSS track index passed from Kotlin is the actual KSS track number
+    // (not a 0-based index) - use it directly
+    int actualTrack = trackIndex;
+    LOGD("nSetTrack: KSS request track %d (valid range: %d-%d)", 
+         actualTrack, gKss->trk_min, gKss->trk_max);
+    if (actualTrack >= gKss->trk_min && actualTrack <= gKss->trk_max) {
+      KSSPLAY_reset(gKssPlay, actualTrack, 0);
+      gKssTrackIndex = actualTrack;
+      LOGD("nSetTrack: KSS track set to %d", actualTrack);
+      return JNI_TRUE;
+    }
+    LOGE("nSetTrack: KSS track %d out of range", actualTrack);
+  }
   return JNI_FALSE;
 }
 
 // libgme-specific: get current track index
 JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentTrack(
     JNIEnv *env, jclass cls) {
+  if (gPlayerType == PlayerType::LIBKSS && gKss) {
+    // Return actual KSS track number (not 0-based index)
+    return gKssTrackIndex;
+  }
   return gGmeTrackIndex;
 }
 
-// Check if file is a multi-track format (NSF, GBS, etc.)
+// Check if file is a multi-track format (NSF, GBS, KSS, etc.)
 JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nIsMultiTrack(
     JNIEnv *env, jclass cls, jstring jpath) {
   const char *path = env->GetStringUTFChars(jpath, nullptr);
-  bool result = isGmeFormat(path);
+  bool result = isGmeFormat(path) || isKssFormat(path);
   env->ReleaseStringUTFChars(jpath, path);
   return result ? JNI_TRUE : JNI_FALSE;
 }
@@ -1145,6 +1408,107 @@ JNIEXPORT jlong JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLength(
   // For VGM files, use the regular function (track index is ignored)
   env->ReleaseStringUTFChars(jpath, path);
   return Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(env, cls, jpath);
+}
+
+// Get KSS track count directly from file path (without opening as active track)
+JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackCountDirect(
+    JNIEnv *env, jclass cls, jstring jpath) {
+  const char *path = env->GetStringUTFChars(jpath, nullptr);
+  
+  if (!isKssFormat(path)) {
+    env->ReleaseStringUTFChars(jpath, path);
+    return 1; // Not a KSS file, return 1 track
+  }
+  
+  // Get filename for KSS_bin2kss
+  const char *filename = strrchr(path, '/');
+  filename = filename ? filename + 1 : path;
+  
+  // Read file into memory
+  FILE *f = fopen(path, "rb");
+  env->ReleaseStringUTFChars(jpath, path);
+  
+  if (!f) {
+    LOGE("Failed to open KSS file for track count");
+    return 1;
+  }
+  
+  fseek(f, 0, SEEK_END);
+  long fileSize = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  
+  std::vector<uint8_t> fileData(fileSize);
+  fread(fileData.data(), 1, fileSize, f);
+  fclose(f);
+  
+  // Create temporary KSS object using KSS_bin2kss which properly parses headers
+  KSS *kss = KSS_bin2kss(fileData.data(), fileSize, filename);
+  if (!kss) {
+    LOGE("Failed to create KSS object for track count");
+    return 1;
+  }
+  
+  int trackCount = kss->trk_max - kss->trk_min + 1;
+  int trkMin = kss->trk_min;
+  int trkMax = kss->trk_max;
+  
+  KSS_delete(kss);
+  
+  LOGD("nGetKssTrackCountDirect: %d tracks (min=%d, max=%d)", trackCount, trkMin, trkMax);
+  return trackCount;
+}
+
+// Get KSS track range (min and max track numbers)
+JNIEXPORT jintArray JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackRange(
+    JNIEnv *env, jclass cls, jstring jpath) {
+  const char *path = env->GetStringUTFChars(jpath, nullptr);
+  
+  jintArray result = env->NewIntArray(2);
+  if (!result) {
+    env->ReleaseStringUTFChars(jpath, path);
+    return nullptr;
+  }
+  
+  jint defaults[] = {1, 1}; // Default: track 1 only
+  env->SetIntArrayRegion(result, 0, 2, defaults);
+  
+  if (!isKssFormat(path)) {
+    env->ReleaseStringUTFChars(jpath, path);
+    return result;
+  }
+  
+  // Get filename for KSS_bin2kss
+  const char *filename = strrchr(path, '/');
+  filename = filename ? filename + 1 : path;
+  
+  // Read file into memory
+  FILE *f = fopen(path, "rb");
+  env->ReleaseStringUTFChars(jpath, path);
+  
+  if (!f) {
+    return result;
+  }
+  
+  fseek(f, 0, SEEK_END);
+  long fileSize = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  
+  std::vector<uint8_t> fileData(fileSize);
+  fread(fileData.data(), 1, fileSize, f);
+  fclose(f);
+  
+  // Create temporary KSS object using KSS_bin2kss which properly parses headers
+  KSS *kss = KSS_bin2kss(fileData.data(), fileSize, filename);
+  if (!kss) {
+    return result;
+  }
+  
+  jint range[] = {kss->trk_min, kss->trk_max};
+  env->SetIntArrayRegion(result, 0, 2, range);
+  
+  KSS_delete(kss);
+  
+  return result;
 }
 
 } // extern "C"

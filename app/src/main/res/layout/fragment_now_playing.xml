@@ -111,11 +111,20 @@
                     android:textSize="12sp" />
 
                 <TextView
-                    android:id="@+id/tv_creator_date"
+                    android:id="@+id/tv_creator"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:textColor="@color/vgmp_text_secondary"
-                    android:textSize="12sp" />
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/tv_date"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/vgmp_text_secondary"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
 
                 <TextView
                     android:id="@+id/tv_notes"

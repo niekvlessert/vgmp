@@ -12,10 +12,28 @@ import java.util.zip.ZipInputStream
 private const val TAG = "GameLibrary"
 private const val MAX_SEARCH_RESULTS = 50
 private val VGM_EXTENSIONS = listOf(".vgm", ".vgz")
-private val GME_EXTENSIONS = listOf(".nsf", ".nsfe", ".gbs", ".gym", ".hes", ".kss", ".ay", ".sap", ".spc")
+private val GME_EXTENSIONS = listOf(".nsf", ".nsfe", ".gbs", ".gym", ".hes", ".ay", ".sap", ".spc")
+// KSS files are now handled by libkss, not libgme
+private val KSS_EXTENSIONS = listOf(".kss", ".mgs", ".bgm", ".opx", ".mpk", ".mbm")
 private val TRACKER_EXTENSIONS = listOf(".mod", ".xm", ".s3m", ".it", ".mptm", ".stm", ".far", ".ult", ".med", ".mtm", ".psm", ".amf", ".okt", ".dsm", ".dtm", ".umx")
-private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + TRACKER_EXTENSIONS
+private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS
 private const val TRACKER_GAME_NAME = "Tracker files"
+
+// Data class for vigamup gameinfo
+data class VigamupGameInfo(
+    val tracksToPlay: List<Int> = emptyList(),
+    val vendor: String = "",
+    val year: String = ""
+)
+
+// Data class for vigamup trackinfo
+data class VigamupTrackInfo(
+    val trackId: Int,
+    val title: String,
+    val durationSeconds: Int,
+    val loopPoint: Int,
+    val repeat: Boolean
+)
 
 /** In-memory representation of a loaded game (used in UI / service) */
 data class Game(
@@ -133,6 +151,12 @@ object GameLibrary {
 
         val m3uTitles = mutableMapOf<String, String>()
         var firstM3uName: String? = null
+        
+        // Vigamup format support
+        val gameInfoFiles = mutableMapOf<String, File>()  // baseName -> gameinfo file
+        val trackInfoFiles = mutableMapOf<String, File>() // baseName -> trackinfo file
+        val artFiles = mutableMapOf<String, File>()       // baseName -> png file
+        val kssFiles = mutableMapOf<String, File>()       // baseName -> kss file
 
         ZipInputStream(BufferedInputStream(inputStream)).use { zis ->
             var entry = zis.nextEntry
@@ -142,10 +166,24 @@ object GameLibrary {
                     Log.d(TAG, "Extracting entry: ${entry.name} -> $name")
                     val outFile = File(gameFolder, sanitizeFilename(name))
                     outFile.outputStream().use { out -> zis.copyTo(out) }
+                    
+                    // Check for vigamup format files
+                    val baseName = name.substringBeforeLast('.')
                     when {
+                        name.endsWith(".gameinfo", true) -> gameInfoFiles[baseName] = outFile
+                        name.endsWith(".trackinfo", true) -> trackInfoFiles[baseName] = outFile
+                        name.endsWith(".kss", true) || name.endsWith(".mgs", true) || 
+                        name.endsWith(".bgm", true) || name.endsWith(".opx", true) ||
+                        name.endsWith(".mpk", true) || name.endsWith(".mbm", true) -> {
+                            kssFiles[baseName] = outFile
+                            vgmFiles.add(outFile)
+                        }
+                        name.endsWith(".png", true) -> {
+                            artFiles[baseName] = outFile
+                            artFile = outFile  // Also set for non-vigamup format
+                        }
                         ALL_AUDIO_EXTENSIONS.any { ext -> name.endsWith(ext, true) } ->
                             vgmFiles.add(outFile)
-                        name.endsWith(".png", true) -> artFile = outFile
                         name.endsWith(".m3u", true) -> {
                             if (firstM3uName == null) firstM3uName = name.removeSuffix(".m3u").removeSuffix(".M3U")
                             m3uContent = outFile.readText()
@@ -168,12 +206,27 @@ object GameLibrary {
         }
 
         Log.d(TAG, "Imported $zipName: ${vgmFiles.size} audio files, art=${artFile != null}, m3u=${m3uContent != null}")
+        Log.d(TAG, "Vigamup: ${kssFiles.size} KSS files, ${gameInfoFiles.size} gameinfo, ${trackInfoFiles.size} trackinfo")
 
         if (vgmFiles.isEmpty()) {
             Log.w(TAG, "No audio files found in $zipName")
             return null
         }
 
+        // Check if this is a vigamup format (has gameinfo files)
+        val isVigamupFormat = gameInfoFiles.isNotEmpty() || trackInfoFiles.isNotEmpty()
+        
+        if (isVigamupFormat && kssFiles.isNotEmpty()) {
+            // Handle vigamup format - each KSS file is a separate game
+            return importVigamupGames(zipName, gameFolder, kssFiles, gameInfoFiles, trackInfoFiles, artFiles)
+        }
+        
+        // Handle KSS files without gameinfo (each KSS file is a separate game)
+        if (kssFiles.isNotEmpty()) {
+            return importKssGames(zipName, gameFolder, kssFiles, artFiles)
+        }
+
+        // Standard VGM/VGZ format handling
         // Sort VGM files – respect .m3u order if available
         val sortedVgm = if (m3uContent != null) {
             sortByM3u(vgmFiles, m3uContent!!, gameFolder)
@@ -292,6 +345,207 @@ object GameLibrary {
         return Game(gameEntity, trackEntities, artBytes)
     }
 
+    // Import vigamup format - each KSS file is a separate game with its own metadata
+    private suspend fun importVigamupGames(
+        zipName: String,
+        gameFolder: File,
+        kssFiles: Map<String, File>,
+        gameInfoFiles: Map<String, File>,
+        trackInfoFiles: Map<String, File>,
+        artFiles: Map<String, File>
+    ): Game? {
+        val importedGames = mutableListOf<Game>()
+        
+        // Process each KSS file as a separate game
+        for ((baseName, kssFile) in kssFiles) {
+            // Parse gameinfo if available
+            val gameInfo = gameInfoFiles[baseName]?.let { file ->
+                parseGameInfo(file.readText())
+            } ?: VigamupGameInfo()
+            
+            // Parse trackinfo if available
+            val trackInfoList = trackInfoFiles[baseName]?.let { file ->
+                parseTrackInfo(file.readText())
+            } ?: emptyList()
+            val trackInfoMap = trackInfoList.associateBy { it.trackId }
+            
+            // Get art file for this game
+            val artFile = artFiles[baseName]
+            
+            // Create game name from base name (convert underscores to spaces, title case)
+            val gameName = baseName.replace("_", " ").replace("-", " ")
+                .split(" ").joinToString(" ") { word ->
+                    word.lowercase().replaceFirstChar { it.uppercase() }
+                }
+            
+            // Check if game already exists by KSS file path
+            val existingGame = db.gameDao().findByPath(kssFile.absolutePath)
+            if (existingGame != null) {
+                val tracks = db.trackDao().getTracksForGame(existingGame.id)
+                val artBytes = if (artFile?.exists() == true) artFile.readBytes() else null
+                importedGames.add(Game(existingGame, tracks, artBytes))
+                continue
+            }
+            
+            // Create game entity - use KSS file path as unique folder path
+            val gameEntity = GameEntity(
+                name = gameName,
+                system = "MSX",  // KSS is primarily MSX format
+                author = gameInfo.vendor,
+                year = gameInfo.year,
+                folderPath = kssFile.absolutePath,  // Use KSS file path as unique identifier
+                artPath = artFile?.absolutePath ?: "",
+                zipSource = zipName,
+                soundChips = "KSS"
+            )
+            val gameId = db.gameDao().insertGame(gameEntity)
+            
+            // Get KSS track info from native engine
+            VgmEngine.setSampleRate(44100)
+            val trackEntities = mutableListOf<TrackEntity>()
+            
+            // Determine which tracks to include
+            val tracksToInclude = if (gameInfo.tracksToPlay.isNotEmpty()) {
+                gameInfo.tracksToPlay
+            } else {
+                // If no tracks_to_play specified, get all tracks from KSS
+                try {
+                    val trackRange = VgmEngine.getKssTrackRange(kssFile.absolutePath)
+                    (trackRange[0]..trackRange[1]).toList()
+                } catch (e: Exception) {
+                    listOf(1)  // Default to track 1
+                }
+            }
+            
+            // Create track entities
+            tracksToInclude.forEachIndexed { idx, trackId ->
+                val trackInfo = trackInfoMap[trackId]
+                val durationSamples = trackInfo?.let { info ->
+                    // Calculate duration from trackinfo (intro + loop*3 for repeating tracks)
+                    val durationMs = calculateTrackDurationMs(info)
+                    durationMs * 44100L / 1000L  // Convert ms to samples
+                } ?: run {
+                    // Try to get duration from native engine
+                    try {
+                        VgmEngine.getTrackLengthDirect(kssFile.absolutePath)
+                    } catch (e: Exception) {
+                        -1L
+                    }
+                }
+                
+                val title = trackInfo?.title ?: "Track $trackId"
+                
+                trackEntities.add(TrackEntity(
+                    id = 0,
+                    gameId = gameId,
+                    title = title,
+                    filePath = kssFile.absolutePath,
+                    durationSamples = durationSamples,
+                    trackIndex = idx,
+                    isFavorite = false,
+                    subTrackIndex = trackId  // Store KSS sub-track index
+                ))
+            }
+            
+            db.trackDao().insertTracks(trackEntities)
+            
+            val artBytes = if (artFile?.exists() == true) artFile.readBytes() else null
+            importedGames.add(Game(gameEntity.copy(id = gameId), trackEntities, artBytes))
+        }
+        
+        // Return first game (for compatibility with single-game return type)
+        return importedGames.firstOrNull()
+    }
+    
+    // Import KSS files without gameinfo (each KSS file is a separate game)
+    private suspend fun importKssGames(
+        zipName: String,
+        gameFolder: File,
+        kssFiles: Map<String, File>,
+        artFiles: Map<String, File>
+    ): Game? {
+        val importedGames = mutableListOf<Game>()
+        
+        // Process each KSS file as a separate game
+        for ((baseName, kssFile) in kssFiles) {
+            // Get art file for this game
+            val artFile = artFiles[baseName]
+            
+            // Create game name from base name (convert underscores to spaces, title case)
+            val gameName = baseName.replace("_", " ").replace("-", " ")
+                .split(" ").joinToString(" ") { word ->
+                    word.lowercase().replaceFirstChar { it.uppercase() }
+                }
+            
+            // Check if game already exists by KSS file path
+            val existingGame = db.gameDao().findByPath(kssFile.absolutePath)
+            if (existingGame != null) {
+                val tracks = db.trackDao().getTracksForGame(existingGame.id)
+                val artBytes = if (artFile?.exists() == true) artFile.readBytes() else null
+                importedGames.add(Game(existingGame, tracks, artBytes))
+                continue
+            }
+            
+            // Create game entity - use KSS file path as unique folder path
+            val gameEntity = GameEntity(
+                name = gameName,
+                system = "MSX",  // KSS is primarily MSX format
+                author = "",
+                year = "",
+                folderPath = kssFile.absolutePath,  // Use KSS file path as unique identifier
+                artPath = artFile?.absolutePath ?: "",
+                zipSource = zipName,
+                soundChips = "KSS"
+            )
+            val gameId = db.gameDao().insertGame(gameEntity)
+            
+            // Get KSS track info from native engine
+            VgmEngine.setSampleRate(44100)
+            val trackEntities = mutableListOf<TrackEntity>()
+            
+            // Get all tracks from KSS
+            val trackRange = try {
+                VgmEngine.getKssTrackRange(kssFile.absolutePath)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get KSS track range for ${kssFile.name}", e)
+                intArrayOf(1, 1)
+            }
+            
+            val tracksToInclude = (trackRange[0]..trackRange[1]).toList()
+            Log.d(TAG, "KSS file ${kssFile.name}: ${tracksToInclude.size} tracks (${trackRange[0]}-${trackRange[1]})")
+            
+            // Create track entities
+            tracksToInclude.forEachIndexed { idx, trackId ->
+                val durationSamples = try {
+                    VgmEngine.getTrackLengthDirect(kssFile.absolutePath)
+                } catch (e: Exception) {
+                    -1L
+                }
+                
+                val title = "Track $trackId"
+                
+                trackEntities.add(TrackEntity(
+                    id = 0,
+                    gameId = gameId,
+                    title = title,
+                    filePath = kssFile.absolutePath,
+                    durationSamples = durationSamples,
+                    trackIndex = idx,
+                    isFavorite = false,
+                    subTrackIndex = trackId  // Store KSS sub-track index
+                ))
+            }
+            
+            db.trackDao().insertTracks(trackEntities)
+            
+            val artBytes = if (artFile?.exists() == true) artFile.readBytes() else null
+            importedGames.add(Game(gameEntity.copy(id = gameId), trackEntities, artBytes))
+        }
+        
+        // Return first game (for compatibility with single-game return type)
+        return importedGames.firstOrNull()
+    }
+
     private fun sortByM3u(files: List<File>, m3u: String, baseDir: File): List<File> {
         val ordered = m3u.lines()
             .filter { !it.startsWith("#") && it.isNotBlank() }
@@ -305,6 +559,69 @@ object GameLibrary {
 
     private fun sanitizeFilename(name: String): String =
         name.replace(Regex("[^a-zA-Z0-9._\\-() ]"), "_")
+
+    // Parse vigamup gameinfo file
+    // Format: "key:value" lines, e.g., "tracks_to_play:2,3,4,5,6,7,8,10,14,15,16"
+    private fun parseGameInfo(content: String): VigamupGameInfo {
+        var tracksToPlay = emptyList<Int>()
+        var vendor = ""
+        var year = ""
+        
+        content.lines().forEach { line ->
+            val parts = line.split(":", limit = 2)
+            if (parts.size == 2) {
+                val key = parts[0].trim().lowercase()
+                val value = parts[1].trim()
+                when (key) {
+                    "tracks_to_play" -> {
+                        tracksToPlay = value.split(",")
+                            .mapNotNull { it.trim().toIntOrNull() }
+                    }
+                    "vendor" -> vendor = value
+                    "year" -> year = value
+                }
+            }
+        }
+        
+        return VigamupGameInfo(tracksToPlay, vendor, year)
+    }
+
+    // Parse vigamup trackinfo file
+    // Format: "track_id,title,duration_seconds,loop_point,repeat_yes/no"
+    private fun parseTrackInfo(content: String): List<VigamupTrackInfo> {
+        return content.lines()
+            .filter { it.isNotBlank() }
+            .mapNotNull { line ->
+                val parts = line.split(",")
+                if (parts.size >= 5) {
+                    val trackId = parts[0].trim().toIntOrNull() ?: return@mapNotNull null
+                    val title = parts[1].trim()
+                    val durationSeconds = parts[2].trim().toIntOrNull() ?: 0
+                    val loopPoint = parts[3].trim().toIntOrNull() ?: 0
+                    val repeat = parts[4].trim().lowercase() == "y"
+                    VigamupTrackInfo(trackId, title, durationSeconds, loopPoint, repeat)
+                } else null
+            }
+    }
+
+    // Calculate duration for a track with loop info
+    // For repeating tracks: intro + (loop_duration * 3)
+    // For non-repeating: just the duration
+    private fun calculateTrackDurationMs(trackInfo: VigamupTrackInfo?): Long {
+        if (trackInfo == null || trackInfo.durationSeconds <= 0) {
+            return 180000L // Default 3 minutes
+        }
+        
+        val introMs = trackInfo.durationSeconds * 1000L
+        val loopMs = trackInfo.loopPoint * 1000L
+        
+        return if (trackInfo.repeat && loopMs > 0) {
+            // For repeating tracks: intro + 3 * loop
+            introMs + loopMs * 3
+        } else {
+            introMs
+        }
+    }
 
     /** Search games by name substring. Returns max 50 results with tracks loaded.
      * If query is empty, returns all games. Favorites are sorted to the top. */

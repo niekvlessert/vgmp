@@ -5,6 +5,9 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -48,9 +51,20 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         updateUI()
         startPositionUpdater()
         observePlaybackInfo()
-        
-        // Set navigation bar color on the dialog's window to match player background
-        dialog?.window?.navigationBarColor = requireContext().getColor(R.color.vgmp_background)
+    }
+    
+    // Helper extension for building colored spanned strings
+    private fun buildSpannedString(builderAction: SpannableStringBuilder.() -> Unit): Spanned {
+        val builder = SpannableStringBuilder()
+        builder.builderAction()
+        return builder
+    }
+    
+    private fun SpannableStringBuilder.colorSpan(text: String, color: Int): SpannableStringBuilder {
+        val start = length
+        append(text)
+        setSpan(ForegroundColorSpan(color), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return this
     }
 
     fun onServiceConnected(svc: VgmPlaybackService) {
@@ -183,7 +197,8 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             binding.tvGame.text = ""
             binding.tvSystem.text = ""
             binding.tvAuthor.text = ""
-            binding.tvCreatorDate.text = ""
+            binding.tvCreator.text = ""
+            binding.tvDate.text = ""
             binding.tvNotes.text = ""
             binding.ivArt.setImageResource(R.drawable.vgmp_logo)
             return
@@ -207,12 +222,61 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             val tags = svc.getCurrentTags()
             binding.tvTitle.text = tags.displayTitle
             binding.tvGame.text = tags.displayGame
-            binding.tvSystem.text = if (tags.displaySystem.isNotEmpty()) "System: ${tags.displaySystem}" else ""
-            binding.tvAuthor.text = if (tags.displayAuthor.isNotEmpty()) "Composers: ${tags.displayAuthor}" else ""
             
-            val creatorDate = listOf(tags.creator, tags.date).filter { it.isNotEmpty() }.joinToString(" | ")
-            binding.tvCreatorDate.text = creatorDate
-            binding.tvNotes.text = tags.notes
+            // System with white value
+            if (tags.displaySystem.isNotEmpty()) {
+                binding.tvSystem.text = buildSpannedString {
+                    colorSpan("System: ", requireContext().getColor(R.color.vgmp_text_secondary))
+                    colorSpan(tags.displaySystem, requireContext().getColor(R.color.vgmp_text_primary))
+                }
+                binding.tvSystem.visibility = View.VISIBLE
+            } else {
+                binding.tvSystem.visibility = View.GONE
+            }
+            
+            // Composers with white value
+            if (tags.displayAuthor.isNotEmpty()) {
+                binding.tvAuthor.text = buildSpannedString {
+                    colorSpan("Composers: ", requireContext().getColor(R.color.vgmp_text_secondary))
+                    colorSpan(tags.displayAuthor, requireContext().getColor(R.color.vgmp_text_primary))
+                }
+                binding.tvAuthor.visibility = View.VISIBLE
+            } else {
+                binding.tvAuthor.visibility = View.GONE
+            }
+            
+            // Pack creator on separate line
+            if (tags.creator.isNotEmpty()) {
+                binding.tvCreator.text = buildSpannedString {
+                    colorSpan("Creator: ", requireContext().getColor(R.color.vgmp_text_secondary))
+                    colorSpan(tags.creator, requireContext().getColor(R.color.vgmp_text_primary))
+                }
+                binding.tvCreator.visibility = View.VISIBLE
+            } else {
+                binding.tvCreator.visibility = View.GONE
+            }
+            
+            // Release year on separate line
+            if (tags.date.isNotEmpty()) {
+                binding.tvDate.text = buildSpannedString {
+                    colorSpan("Year: ", requireContext().getColor(R.color.vgmp_text_secondary))
+                    colorSpan(tags.date, requireContext().getColor(R.color.vgmp_text_primary))
+                }
+                binding.tvDate.visibility = View.VISIBLE
+            } else {
+                binding.tvDate.visibility = View.GONE
+            }
+            
+            // Notes with label
+            if (tags.notes.isNotEmpty()) {
+                binding.tvNotes.text = buildSpannedString {
+                    colorSpan("Notes: ", requireContext().getColor(R.color.vgmp_text_secondary))
+                    colorSpan(tags.notes, requireContext().getColor(R.color.vgmp_text_primary))
+                }
+                binding.tvNotes.visibility = View.VISIBLE
+            } else {
+                binding.tvNotes.visibility = View.GONE
+            }
             
             updateVolumeSliders()
         }

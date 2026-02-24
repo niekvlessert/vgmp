@@ -229,35 +229,16 @@ class GameAdapter(
         fun bind(game: Game, globalIdx: Int, expanded: Boolean, nowPlayingTrack: TrackEntity?) {
             nameView.text = game.name
             
-            // Show system in green for NSF/SPC files, or sound chips for VGM files
-            val isGmeFormat = game.tracks.firstOrNull()?.filePath?.let { path ->
-                path.endsWith(".nsf", ignoreCase = true) ||
-                path.endsWith(".nsfe", ignoreCase = true) ||
-                path.endsWith(".spc", ignoreCase = true) ||
-                path.endsWith(".gbs", ignoreCase = true) ||
-                path.endsWith(".gym", ignoreCase = true) ||
-                path.endsWith(".hes", ignoreCase = true) ||
-                path.endsWith(".kss", ignoreCase = true) ||
-                path.endsWith(".ay", ignoreCase = true) ||
-                path.endsWith(".sap", ignoreCase = true)
-            } ?: false
-            
-            if (isGmeFormat) {
-                // For NSF/SPC: show system in green, hide chips
-                systemView.text = game.system
-                systemView.visibility = if (game.system.isNotEmpty()) View.VISIBLE else View.GONE
-                chipsView.visibility = View.GONE
+            // Show system type with filetype for all formats (VGM, NSF, SPC, etc.)
+            val filetype = getFiletypeFromGame(game)
+            val systemText = if (filetype.isNotEmpty() && game.system.isNotEmpty()) {
+                "${game.system} ($filetype)"
             } else {
-                // For VGM: show chips in green (where system normally is), hide system
-                if (game.entity.soundChips.isNotEmpty()) {
-                    systemView.text = game.entity.soundChips
-                    systemView.visibility = View.VISIBLE
-                } else {
-                    systemView.text = game.system
-                    systemView.visibility = if (game.system.isNotEmpty()) View.VISIBLE else View.GONE
-                }
-                chipsView.visibility = View.GONE
+                game.system
             }
+            systemView.text = systemText
+            systemView.visibility = if (systemText.isNotEmpty()) View.VISIBLE else View.GONE
+            chipsView.visibility = View.GONE
             
             btnFavorite.setImageResource(
                 if (game.entity.isFavorite) R.drawable.ic_star else R.drawable.ic_star_border
@@ -314,6 +295,46 @@ class GameAdapter(
                     trackView.setOnClickListener { trackClickListener?.invoke(track, idx) }
                     tracksContainer.addView(trackView)
                 }
+            }
+        }
+        
+        private fun getFiletypeFromGame(game: Game): String {
+            // Get filetype from the first track's file extension
+            val firstTrack = game.tracks.firstOrNull() ?: return ""
+            val path = firstTrack.filePath.lowercase()
+            return when {
+                path.endsWith(".vgm") -> "VGM"
+                path.endsWith(".vgz") -> "VGZ"
+                path.endsWith(".nsf") -> "NSF"
+                path.endsWith(".nsfe") -> "NSFe"
+                path.endsWith(".spc") -> "SPC"
+                path.endsWith(".gbs") -> "GBS"
+                path.endsWith(".gym") -> "GYM"
+                path.endsWith(".hes") -> "HES"
+                path.endsWith(".ay") -> "AY"
+                path.endsWith(".sap") -> "SAP"
+                path.endsWith(".kss") -> "KSS"
+                path.endsWith(".mgs") -> "MGS"
+                path.endsWith(".bgm") -> "BGM"
+                path.endsWith(".opx") -> "OPX"
+                path.endsWith(".mpk") -> "MPK"
+                path.endsWith(".mbm") -> "MBM"
+                path.endsWith(".mod") -> "MOD"
+                path.endsWith(".xm") -> "XM"
+                path.endsWith(".s3m") -> "S3M"
+                path.endsWith(".it") -> "IT"
+                path.endsWith(".mptm") -> "MPTM"
+                path.endsWith(".669") -> "669"
+                path.endsWith(".med") -> "MED"
+                path.endsWith(".far") -> "FAR"
+                path.endsWith(".ult") -> "ULT"
+                path.endsWith(".mtm") -> "MTM"
+                path.endsWith(".psm") -> "PSM"
+                path.endsWith(".amf") -> "AMF"
+                path.endsWith(".okt") -> "OKT"
+                path.endsWith(".dsm") -> "DSM"
+                path.endsWith(".dtm") -> "DTM"
+                else -> ""
             }
         }
     }

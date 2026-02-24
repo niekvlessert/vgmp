@@ -60,6 +60,10 @@ object VgmEngine {
     @JvmStatic external fun nSetEndlessLoop(enabled: Boolean)
     @JvmStatic external fun nGetEndlessLoop(): Boolean
 
+    // KSS direct track info (without opening as active track)
+    @JvmStatic external fun nGetKssTrackCountDirect(path: String): Int
+    @JvmStatic external fun nGetKssTrackRange(path: String): IntArray  // Returns [minTrack, maxTrack]
+
     // ----- Thread-safe wrappers -----
 
     suspend fun setSampleRate(rate: Int) = mutex.withLock { nSetSampleRate(rate) }
@@ -91,6 +95,10 @@ object VgmEngine {
     // Endless loop mode
     suspend fun setEndlessLoop(enabled: Boolean) = mutex.withLock { nSetEndlessLoop(enabled) }
     suspend fun getEndlessLoop(): Boolean = mutex.withLock { nGetEndlessLoop() }
+    
+    // KSS direct track info
+    suspend fun getKssTrackCountDirect(path: String): Int = mutex.withLock { nGetKssTrackCountDirect(path) }
+    suspend fun getKssTrackRange(path: String): IntArray = mutex.withLock { nGetKssTrackRange(path) }
 
     /**
      * Parse the raw tag string returned by [nGetTags] into a [VgmTags] object.

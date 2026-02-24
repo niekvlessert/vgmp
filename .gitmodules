@@ -7,3 +7,6 @@
 [submodule "app/src/main/cpp/libopenmpt"]
 	path = app/src/main/cpp/libopenmpt
 	url = https://github.com/OpenMPT/openmpt.git
+[submodule "app/src/main/cpp/libkss"]
+	path = app/src/main/cpp/libkss
+	url = https://github.com/digital-sound-antiques/libkss.git

@@ -91,6 +91,11 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libgme gme_build)
 # Include libopenmpt for tracker formats (MOD, XM, S3M, IT, etc.)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libopenmpt openmpt_build)
 
+# Include libkss for KSS format (MSX music files)
+# Note: libkss has its own emu2413/emu8950 which conflicts with libgme's emu2413
+# We use linker option --allow-multiple-definition to resolve this
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libkss kss_build)
+
 # JNI glue shared library
 add_library(vgmplayer SHARED vgmplayer_jni.cpp)
 
@@ -99,6 +104,9 @@ target_include_directories(vgmplayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/libgme/gme
     ${CMAKE_CURRENT_SOURCE_DIR}/libopenmpt
     ${CMAKE_CURRENT_SOURCE_DIR}/libopenmpt/libopenmpt
+    ${CMAKE_CURRENT_SOURCE_DIR}/libkss
+    ${CMAKE_CURRENT_SOURCE_DIR}/libkss/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/libkss/modules
 )
 
 target_link_libraries(vgmplayer
@@ -107,7 +115,12 @@ target_link_libraries(vgmplayer
     vgm-utils
     gme_static
     openmpt_static
+    kss
     log
     android
     z
 )
+
+# Allow multiple definitions to resolve conflicts between libgme's emu2413 and libkss's emu2413
+# Both libraries have their own emu2413 implementation with the same symbols
+target_link_options(vgmplayer PRIVATE "-Wl,--allow-multiple-definition")
