@@ -425,8 +425,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         // Get live duration from engine and compare with stored value
         val liveDurationSamples = VgmEngine.getTotalSamples()
         val storedDurationSamples = track.durationSamples
-        trackDurationMs = if (liveDurationSamples > 0)
-            liveDurationSamples * 1000L / SAMPLE_RATE else 0L
+        // Use live duration if available, otherwise fall back to stored duration
+        val effectiveDurationSamples = if (liveDurationSamples > 0) liveDurationSamples else storedDurationSamples
+        trackDurationMs = if (effectiveDurationSamples > 0)
+            effectiveDurationSamples * 1000L / SAMPLE_RATE else 0L
 
         // Update MediaSession metadata (→ AVRCP 1.6)
         updateMediaSessionMetadata()

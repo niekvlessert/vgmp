@@ -717,8 +717,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
         }
       }
     }
-    // Default to 3 minutes for KSS files
-    return (jlong)180 * gSampleRate;
+    // Return 0 if no duration info - let Kotlin use stored duration
+    return 0;
   }
   if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
     // MIDI files have variable length - get from libADLMIDI
@@ -726,8 +726,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
     if (totalSeconds > 0) {
       return (jlong)(totalSeconds * gSampleRate);
     }
-    // Default to 3 minutes if duration unknown
-    return (jlong)180 * gSampleRate;
+    // Return 0 if duration unknown - let Kotlin code use stored duration
+    return 0;
   }
   return 0;
 }
@@ -777,7 +777,31 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
     double seconds = (double)samplePos / gSampleRate;
     adl_positionSeek(gAdlPlayer, seconds);
   }
-  // KSS doesn't support seeking - would need to reset and render silent
+  // KSS doesn't have a direct seek function - need to reset and fast-forward
+  if (gPlayerType == PlayerType::LIBKSS && gKssPlay && gKss) {
+    // Get current position in samples
+    UINT64 currentPos = 0;
+    if (gVgmPlayer) {
+      // We track position manually for KSS since there's no getter
+    }
+    
+    // For KSS, we need to reset and fast-forward to the target position
+    // This is expensive but the only way to seek in KSS
+    LOGD("KSS seek to %lld samples (reset and fast-forward)", (long long)samplePos);
+    
+    // Reset to current track
+    KSSPLAY_reset(gKssPlay, gKssTrackIndex, 0);
+    
+    // Fast-forward silently to the target position
+    // Use large chunks for efficiency
+    const int CHUNK_SIZE = 4096;
+    UINT64 remaining = samplePos;
+    while (remaining > 0) {
+      int toCalc = (remaining > CHUNK_SIZE) ? CHUNK_SIZE : (int)remaining;
+      KSSPLAY_calc_silent(gKssPlay, toCalc);
+      remaining -= toCalc;
+    }
+  }
 }
 
 /**
@@ -1336,6 +1360,88 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
     
     // Cast to jlong BEFORE multiplication to avoid integer overflow
     return (jlong)length_ms * gSampleRate / 1000;
+  }
+
+  // Check if this is a KSS format
+  if (isKssFormat(path)) {
+    // Read the entire file into memory for libkss
+    FILE *f = fopen(path, "rb");
+    
+    if (!f) {
+      env->ReleaseStringUTFChars(jpath, path);
+      return 0;
+    }
+    
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    std::vector<uint8_t> fileData(fileSize);
+    if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
+      fclose(f);
+      env->ReleaseStringUTFChars(jpath, path);
+      return 0;
+    }
+    fclose(f);
+    
+    // Get filename for KSS_bin2kss
+    const char *filename = strrchr(path, '/');
+    filename = filename ? filename + 1 : path;
+    
+    // Create KSS object
+    KSS *tempKss = KSS_bin2kss(fileData.data(), fileSize, filename);
+    if (!tempKss) {
+      env->ReleaseStringUTFChars(jpath, path);
+      return 0;
+    }
+    
+    // Check if KSS has duration info
+    jlong duration = 0;
+    if (tempKss->info && tempKss->info_num > 0) {
+      // Find the first track's duration
+      for (uint16_t i = 0; i < tempKss->info_num; i++) {
+        if (tempKss->info[i].song == tempKss->trk_min && tempKss->info[i].time_in_ms > 0) {
+          duration = (jlong)tempKss->info[i].time_in_ms * gSampleRate / 1000;
+          break;
+        }
+      }
+    }
+    
+    KSS_delete(tempKss);
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    // Return 0 if no duration info found - let Kotlin use stored duration
+    return duration;
+  }
+
+  // Check if this is a MIDI format
+  if (isMidiFormat(path)) {
+    ADL_MIDIPlayer *tempPlayer = adl_init(gSampleRate);
+    
+    if (!tempPlayer) {
+      env->ReleaseStringUTFChars(jpath, path);
+      return (jlong)180 * gSampleRate; // Default 3 minutes
+    }
+    
+    // Set DMX Bobby Prince v2 bank (bank 14) for Doom MIDI files
+    adl_setBank(tempPlayer, 14);
+    
+    // Open the MIDI file
+    if (adl_openFile(tempPlayer, path) != 0) {
+      adl_close(tempPlayer);
+      env->ReleaseStringUTFChars(jpath, path);
+      return (jlong)180 * gSampleRate; // Default 3 minutes
+    }
+    
+    // Get total duration
+    double totalSeconds = adl_totalTimeLength(tempPlayer);
+    adl_close(tempPlayer);
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    if (totalSeconds > 0) {
+      return (jlong)(totalSeconds * gSampleRate);
+    }
+    return (jlong)180 * gSampleRate; // Default 3 minutes
   }
 
   // Use libvgm for VGM/VGZ - VGM files have accurate length from GD3 tags
