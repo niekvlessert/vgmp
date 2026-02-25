@@ -22,6 +22,9 @@ interface GameDao {
     @Query("SELECT * FROM games WHERE name LIKE '%' || :query || '%' OR system LIKE '%' || :query || '%' ORDER BY name ASC LIMIT 50")
     suspend fun searchGames(query: String): List<GameEntity>
 
+    @Query("SELECT * FROM games WHERE name = :exactName LIMIT 1")
+    suspend fun findGameByName(exactName: String): GameEntity?
+
     @Query("SELECT * FROM games ORDER BY name ASC LIMIT :limit OFFSET :offset")
     suspend fun getAllGamesPaginated(limit: Int, offset: Int): List<GameEntity>
 

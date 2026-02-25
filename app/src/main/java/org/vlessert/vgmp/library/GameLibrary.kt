@@ -28,7 +28,8 @@ private val RSN_EXTENSIONS = listOf(".rsn")
 private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS + MIDI_EXTENSIONS + MUS_EXTENSIONS + RSN_EXTENSIONS
 private const val TRACKER_GAME_NAME = "Tracker files"
 private const val MIDI_GAME_NAME = "MIDI files"
-private const val MUS_GAME_NAME = "Doom MUS files"
+private const val DOOM1_GAME_NAME = "Doom"
+private const val DOOM2_GAME_NAME = "Doom II"
 
 // Data class for vigamup gameinfo
 data class VigamupGameInfo(
@@ -262,10 +263,40 @@ object GameLibrary {
         // Insert game into DB first (need ID for tracks)
         val existingGame = db.gameDao().findByPath(gameFolder.absolutePath)
         if (existingGame != null) {
-            // Re-use existing game entry
+            // Re-use existing game entry, but update system name if it's empty
+            var updatedSystem = existingGame.system
+            
+            if (existingGame.system.isEmpty()) {
+                // Try to get system name from first VGM file
+                val firstVgm = sortedVgm.firstOrNull()
+                if (firstVgm != null) {
+                    try {
+                        if (VgmEngine.open(firstVgm.absolutePath)) {
+                            val tags = VgmEngine.parseTags(VgmEngine.getTags())
+                            if (tags.systemEn.isNotEmpty()) {
+                                updatedSystem = tags.systemEn
+                            } else if (tags.systemJp.isNotEmpty()) {
+                                updatedSystem = tags.systemJp
+                            }
+                            VgmEngine.close()
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not get tags for existing game ${existingGame.name}")
+                    }
+                }
+            }
+            
+            val finalGame = if (updatedSystem != existingGame.system) {
+                val updatedGame = existingGame.copy(system = updatedSystem)
+                db.gameDao().insertGame(updatedGame)  // REPLACE strategy will update
+                updatedGame
+            } else {
+                existingGame
+            }
+            
             val tracks = db.trackDao().getTracksForGame(existingGame.id)
             val artBytes = if (artFile?.exists() == true) artFile!!.readBytes() else null
-            return Game(existingGame, tracks, artBytes)
+            return Game(finalGame, tracks, artBytes)
         }
 
         val tempGameEntity = GameEntity(
@@ -339,10 +370,14 @@ object GameLibrary {
         }
 
         // Update game with resolved name
+        // Detect if this is a MIDI-only zip and set system accordingly
+        val hasMidiFiles = sortedVgm.any { it.extension.equals("mid", ignoreCase = true) || it.extension.equals("midi", ignoreCase = true) }
+        val finalSystemName = if (systemName.isEmpty() && hasMidiFiles) "(MIDI)" else systemName
+        
         val gameEntity = GameEntity(
             id = gameId,
             name = gameName,
-            system = systemName,
+            system = finalSystemName,
             author = authorName,
             year = yearStr,
             folderPath = gameFolder.absolutePath,
@@ -837,8 +872,21 @@ object GameLibrary {
         // Check for existing game
         val existingGame = db.gameDao().findByPath(gameFolder.absolutePath)
         if (existingGame != null) {
+            // Re-use existing game entry, but update system name if it's empty
+            var needsUpdate = false
+            var updatedGame = existingGame
+
+            if (existingGame.system.isEmpty() && systemName.isNotEmpty()) {
+                updatedGame = existingGame.copy(system = systemName)
+                needsUpdate = true
+            }
+
+            if (needsUpdate) {
+                db.gameDao().insertGame(updatedGame)  // REPLACE strategy will update
+            }
+
             val tracks = db.trackDao().getTracksForGame(existingGame.id)
-            return Game(existingGame, tracks, null)
+            return Game(if (needsUpdate) updatedGame else existingGame, tracks, null)
         }
         
         // Create game entry
@@ -1050,11 +1098,11 @@ object GameLibrary {
         }
     }
     
-    private suspend fun _importMusFile(file: File): Game? {
-        // Get or create the "Doom MUS files" game entry
-        var musGame = db.gameDao().searchGames(MUS_GAME_NAME).firstOrNull()
+    private suspend fun _importMusFile(file: File, gameName: String = DOOM1_GAME_NAME, year: String = "1993"): Game? {
+        // Get or create the game entry - use exact name match
+        var musGame = db.gameDao().findGameByName(gameName)
         
-        val musFolder = File(gamesDir, sanitizeFilename(MUS_GAME_NAME)).also { it.mkdirs() }
+        val musFolder = File(gamesDir, sanitizeFilename(gameName)).also { it.mkdirs() }
         
         // Copy file to MUS folder
         val destFile = File(musFolder, file.name)
@@ -1101,12 +1149,12 @@ object GameLibrary {
         }
         
         if (musGame == null) {
-            // Create new "Doom MUS files" game
+            // Create new game
             val gameEntity = GameEntity(
-                name = MUS_GAME_NAME,
+                name = gameName,
                 system = "Doom (OPL3)",
-                author = "Various",
-                year = "1993",
+                author = "id Software",
+                year = year,
                 folderPath = musFolder.absolutePath,
                 artPath = "",
                 zipSource = "mus_files"
@@ -1126,7 +1174,7 @@ object GameLibrary {
             
             return Game(gameEntity.copy(id = gameId), listOf(trackEntity), null)
         } else {
-            // Add to existing "Doom MUS files" game
+            // Add to existing game
             val existingTracks = db.trackDao().getTracksForGame(musGame.id)
             val nextIndex = existingTracks.size
             
@@ -1148,48 +1196,80 @@ object GameLibrary {
     
     /**
      * Load bundled MUS files from assets on first run.
-     * musFiles: list of asset paths like "D_E1M1.lmp"
+     * @param context Android context
+     * @param musFiles list of asset paths like "doom1_mus/D_E1M1.lmp"
+     * @param gameName the game name to use (e.g., "Doom" or "Doom II")
+     * @param year the year for the game
      */
-    suspend fun loadBundledMusFilesIfNeeded(context: Context, musFiles: List<String>) =
-        withContext(Dispatchers.IO) {
-            // Check if "Doom MUS files" game already exists
-            if (db.gameDao().searchGames(MUS_GAME_NAME).isNotEmpty()) {
-                return@withContext
+    suspend fun loadBundledMusFilesIfNeeded(
+        context: Context, 
+        musFiles: List<String>,
+        gameName: String = DOOM1_GAME_NAME,
+        year: String = "1993"
+    ) = withContext(Dispatchers.IO) {
+        // Migration: Remove old "Doom MUS files" game if it exists
+        val oldGameName = "Doom MUS files"
+        val oldGame = db.gameDao().searchGames(oldGameName).firstOrNull()
+        if (oldGame != null) {
+            Log.d(TAG, "Migrating: removing old '$oldGameName' game")
+            db.gameDao().deleteGameById(oldGame.id)
+            // Also delete the folder
+            val oldFolder = File(gamesDir, oldGameName)
+            if (oldFolder.exists()) {
+                oldFolder.deleteRecursively()
             }
-            
-            // First, copy GENMIDI.lmp to the games root directory (needed for OPL synthesis)
+        }
+        
+        // First, copy GENMIDI.lmp to the games root directory (needed for OPL synthesis)
+        try {
+            val genmidiAsset = "GENMIDI.lmp"
+            val tempGenmidi = File(context.cacheDir, genmidiAsset)
+            context.assets.open(genmidiAsset).use { input ->
+                tempGenmidi.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            // Copy to games directory so it can be found by the native code
+            val gamesGenmidi = File(gamesDir, genmidiAsset)
+            tempGenmidi.copyTo(gamesGenmidi, overwrite = false)
+            Log.d(TAG, "GENMIDI.lmp copied to games directory")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to copy GENMIDI.lmp", e)
+        }
+        
+        // Get existing tracks to avoid duplicates - use exact name match
+        val existingGame = db.gameDao().findGameByName(gameName)
+        val existingTrackNames: Set<String> = existingGame?.let { game ->
+            db.trackDao().getTracksForGame(game.id).map { it.title }.toSet()
+        } ?: emptySet()
+        
+        var importedCount = 0
+        for (assetPath in musFiles) {
             try {
-                val genmidiAsset = "GENMIDI.lmp"
-                val tempGenmidi = File(context.cacheDir, genmidiAsset)
-                context.assets.open(genmidiAsset).use { input ->
-                    tempGenmidi.outputStream().use { output ->
+                val fileName = assetPath.substringAfterLast('/')
+                
+                // Skip if track already exists
+                if (fileName in existingTrackNames) {
+                    continue
+                }
+                
+                val tempFile = File(context.cacheDir, fileName)
+                context.assets.open(assetPath).use { input ->
+                    tempFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
-                // Copy to games directory so it can be found by the native code
-                val gamesGenmidi = File(gamesDir, genmidiAsset)
-                tempGenmidi.copyTo(gamesGenmidi, overwrite = false)
-                Log.d(TAG, "GENMIDI.lmp copied to games directory")
+                _importMusFile(tempFile, gameName, year)
+                tempFile.delete()
+                importedCount++
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to copy GENMIDI.lmp", e)
-            }
-            
-            for (assetPath in musFiles) {
-                try {
-                    val fileName = assetPath.substringAfterLast('/')
-                    val tempFile = File(context.cacheDir, fileName)
-                    context.assets.open(assetPath).use { input ->
-                        tempFile.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                    importMusFile(tempFile)
-                    tempFile.delete()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to load bundled MUS file $assetPath", e)
-                }
+                Log.e(TAG, "Failed to load bundled MUS file $assetPath", e)
             }
         }
+        if (importedCount > 0) {
+            Log.d(TAG, "Imported $importedCount new MUS files to $gameName")
+        }
+    }
     
     /**
      * Import a MIDI file into the special "MIDI files" game.
@@ -1241,7 +1321,7 @@ object GameLibrary {
             // Create new "MIDI files" game
             val gameEntity = GameEntity(
                 name = MIDI_GAME_NAME,
-                system = "Various",
+                system = "(MIDI)",
                 author = "",
                 year = "",
                 folderPath = midiFolder.absolutePath,
