@@ -36,6 +36,9 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
     // Playback speed options: 100%, 75%, 50%, 25%
     private val speedOptions = doubleArrayOf(1.0, 0.75, 0.5, 0.25)
     private var currentSpeedIndex = 0
+    
+    // Soloed channels tracking
+    private val soloedChannels = mutableSetOf<Int>()
 
     companion object {
         fun newInstance() = NowPlayingFragment()
@@ -292,6 +295,7 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             }
             
             updateVolumeSliders()
+            updateChannelControls()
         }
         
         updatePlayPauseButton()
@@ -455,6 +459,146 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                 container.addView(view)
             }
         }
+    }
+
+    private suspend fun updateChannelControls() {
+        // Reset soloed channels when track changes
+        if (soloedChannels.isNotEmpty()) {
+            soloedChannels.clear()
+        }
+        val binding = _binding ?: return
+        val container = binding.channelsContainer
+        val header = binding.tvChannelsHeader
+        
+        val count = VgmEngine.getChannelCount()
+        
+        // Show/hide header based on whether there are channels
+        header.visibility = if (count > 0) android.view.View.VISIBLE else android.view.View.GONE
+        
+        // Only clear and rebuild if count changed or container is empty
+        if (container.childCount != count) {
+            container.removeAllViews()
+            for (i in 0 until count) {
+                val name = VgmEngine.getChannelName(i)
+                val deviceName = VgmEngine.getChannelDeviceName(i)
+                
+                val view = LayoutInflater.from(context).inflate(R.layout.item_channel, container, false)
+                view.findViewById<android.widget.TextView>(R.id.tv_channel_name).text = name
+                
+                // Mute button
+                val btnMute = view.findViewById<android.widget.ImageButton>(R.id.btn_channel_mute)
+                val isMuted = VgmEngine.isChannelMuted(i)
+                btnMute.setImageResource(if (isMuted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
+                btnMute.setColorFilter(resources.getColor(if (isMuted) R.color.vgmp_accent else R.color.vgmp_text_secondary, null))
+                btnMute.setOnClickListener {
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        val currentMuted = VgmEngine.isChannelMuted(i)
+                        val newMuted = !currentMuted
+                        VgmEngine.setChannelMuted(i, newMuted)
+                        
+                        // Update button state
+                        btnMute.setImageResource(if (newMuted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
+                        btnMute.setColorFilter(resources.getColor(if (newMuted) R.color.vgmp_accent else R.color.vgmp_text_secondary, null))
+                        
+                        // If we're unmuting and there are soloed channels, keep it muted
+                        if (newMuted == false && soloedChannels.isNotEmpty() && !soloedChannels.contains(i)) {
+                            VgmEngine.setChannelMuted(i, true)
+                            btnMute.setImageResource(R.drawable.ic_volume_off)
+                            btnMute.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
+                        }
+                    }
+                }
+                
+                // Solo button
+                val btnSolo = view.findViewById<android.widget.ImageButton>(R.id.btn_channel_solo)
+                btnSolo.setOnClickListener {
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        // Implement solo logic
+                        val isSoloed = isChannelSoloed(i)
+                        if (isSoloed) {
+                            // Unsolo this channel
+                            soloedChannels.remove(i)
+                            btnSolo.setImageResource(R.drawable.ic_volume_up)
+                            btnSolo.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
+                            // If no channels are soloed, unmute all
+                            if (soloedChannels.isEmpty()) {
+                                for (j in 0 until VgmEngine.getChannelCount()) {
+                                    VgmEngine.setChannelMuted(j, false)
+                                    // Update mute button
+                                    val child = container.getChildAt(j)
+                                    child.findViewById<android.widget.ImageButton>(R.id.btn_channel_mute)
+                                        ?.setImageResource(R.drawable.ic_volume_up)
+                                    child.findViewById<android.widget.ImageButton>(R.id.btn_channel_mute)
+                                        ?.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
+                                }
+                            } else {
+                                // Mute all channels except soloed ones
+                                for (j in 0 until VgmEngine.getChannelCount()) {
+                                    VgmEngine.setChannelMuted(j, !soloedChannels.contains(j))
+                                    // Update mute button
+                                    val child = container.getChildAt(j)
+                                    child.findViewById<android.widget.ImageButton>(R.id.btn_channel_mute)
+                                        ?.setImageResource(if (soloedChannels.contains(j)) R.drawable.ic_volume_up else R.drawable.ic_volume_off)
+                                    child.findViewById<android.widget.ImageButton>(R.id.btn_channel_mute)
+                                        ?.setColorFilter(resources.getColor(if (soloedChannels.contains(j)) R.color.vgmp_text_secondary else R.color.vgmp_accent, null))
+                                }
+                            }
+                        } else {
+                            // Solo this channel - only one channel can be soloed at a time
+                            val previousSoloedChannels = soloedChannels.toList()
+                            soloedChannels.clear()
+                            soloedChannels.add(i)
+                            
+                            // Update solo button for previous soloed channels
+                            for (j in previousSoloedChannels) {
+                                val previousChild = container.getChildAt(j)
+                                previousChild.findViewById<android.widget.ImageButton>(R.id.btn_channel_solo)
+                                    ?.setImageResource(R.drawable.ic_volume_up)
+                                previousChild.findViewById<android.widget.ImageButton>(R.id.btn_channel_solo)
+                                    ?.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
+                            }
+                            
+                            btnSolo.setImageResource(R.drawable.ic_volume_solo)
+                            btnSolo.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
+                            
+                            // Mute all channels except the currently soloed one
+                            for (j in 0 until VgmEngine.getChannelCount()) {
+                                VgmEngine.setChannelMuted(j, j != i)
+                                // Update mute button
+                                val child = container.getChildAt(j)
+                                child.findViewById<android.widget.ImageButton>(R.id.btn_channel_mute)
+                                    ?.setImageResource(if (j == i) R.drawable.ic_volume_up else R.drawable.ic_volume_off)
+                                child.findViewById<android.widget.ImageButton>(R.id.btn_channel_mute)
+                                    ?.setColorFilter(resources.getColor(if (j == i) R.color.vgmp_text_secondary else R.color.vgmp_accent, null))
+                            }
+                        }
+                    }
+                }
+                
+                container.addView(view)
+            }
+        } else {
+            // If count is same, just update existing views with current state
+            for (i in 0 until count) {
+                val child = container.getChildAt(i)
+                val btnMute = child.findViewById<android.widget.ImageButton>(R.id.btn_channel_mute)
+                val btnSolo = child.findViewById<android.widget.ImageButton>(R.id.btn_channel_solo)
+                
+                // Update mute button
+                val isMuted = VgmEngine.isChannelMuted(i)
+                btnMute.setImageResource(if (isMuted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
+                btnMute.setColorFilter(resources.getColor(if (isMuted) R.color.vgmp_accent else R.color.vgmp_text_secondary, null))
+                
+                // Update solo button
+                val isSoloed = soloedChannels.contains(i)
+                btnSolo.setImageResource(if (isSoloed) R.drawable.ic_volume_solo else R.drawable.ic_volume_up)
+                btnSolo.setColorFilter(resources.getColor(if (isSoloed) R.color.vgmp_accent else R.color.vgmp_text_secondary, null))
+            }
+        }
+    }
+
+    private fun isChannelSoloed(channelIndex: Int): Boolean {
+        return soloedChannels.contains(channelIndex)
     }
 
     private fun updatePlayPauseButton() {

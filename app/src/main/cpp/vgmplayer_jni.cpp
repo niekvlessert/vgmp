@@ -19,6 +19,7 @@
 
 #include "libvgm/emu/EmuStructs.h"
 #include "libvgm/emu/Resampler.h"
+#include "libvgm/emu/SoundDevs.h"
 #include "libvgm/player/playerbase.hpp"
 #include "libvgm/player/vgmplayer.hpp"
 #include "libvgm/utils/DataLoader.h"
@@ -67,6 +68,7 @@ static std::string gRomPath = "";
 // Current track index for libgme (NSF can have multiple tracks)
 static int gGmeTrackIndex = 0;
 static int gGmeTrackCount = 0;
+static std::vector<bool> gGmeMutedChannels;
 
 // Current track index for libkss (KSS can have multiple tracks)
 static int gKssTrackIndex = 0;
@@ -256,6 +258,9 @@ static bool isMusFormat(const char *path) {
 }
 
 static void cleanup() {
+  // Reset channel muted states
+  gGmeMutedChannels.clear();
+  
   // Cleanup libvgm
   if (gVgmPlayer) {
     gVgmPlayer->Stop();
@@ -1710,6 +1715,272 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetDeviceVolume(
     gVgmPlayer->SetDeviceVolume(id, (UINT16)vol);
   }
   // libgme doesn't support per-device volume
+}
+
+JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelCount(
+    JNIEnv *env, jclass cls) {
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    return gme_voice_count(gGmePlayer);
+  } else if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    std::vector<PLR_DEV_INFO> devs;
+    if (gVgmPlayer->GetSongDeviceInfo(devs) <= 0x01) {
+      int totalChannels = 0;
+      for (auto &dev : devs) {
+        // Get device options to find channel count from muting mask
+        PLR_DEV_OPTS devOpts;
+        if (gVgmPlayer->GetDeviceOptions(dev.id, devOpts) <= 0x01) {
+          // Check how many bits are set in chnMute masks (but actually we need to know total channels)
+          // Wait, how does libvgm report channel count? Let's check devDecl
+          if (dev.devDecl) {
+            // For now, let's assume standard channel counts for known chips
+            switch (dev.type) {
+              case DEVID_SN76496: totalChannels += 4; break;
+              case DEVID_AY8910: totalChannels += 3; break;
+              case DEVID_YM2413: totalChannels += 9; break;
+              case DEVID_YM2612: totalChannels += 6; break;
+              case DEVID_YM2151: totalChannels += 8; break;
+              case DEVID_VBOY_VSU: totalChannels += 8; break;
+              case DEVID_YM2203: totalChannels += 3; break;
+              case DEVID_YM2608: totalChannels += 12; break;
+              case DEVID_YM2610: totalChannels += 12; break;
+              case DEVID_RF5C68: totalChannels += 8; break;
+              case DEVID_SAA1099: totalChannels += 6; break;
+              case DEVID_32X_PWM: totalChannels += 1; break;
+              case DEVID_MSM6258: totalChannels += 1; break;
+              case DEVID_MSM6295: totalChannels += 1; break;
+              case DEVID_K054539: totalChannels += 8; break;
+              case DEVID_QSOUND: totalChannels += 16; break;
+              case DEVID_NES_APU: totalChannels += 5; break; // 2 square, 1 triangle, 1 noise, 1 DMC
+              case DEVID_SEGAPCM: totalChannels += 16; break;
+              case DEVID_K051649: totalChannels += 8; break;
+              default: break;
+            }
+          }
+        }
+      }
+      return totalChannels;
+    }
+  }
+  return 0;
+}
+
+JNIEXPORT jstring JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelDeviceName(
+    JNIEnv *env, jclass cls, jint index) {
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    // For libgme, voices are per emulator, so just return emulator name
+    const char* sysName = gme_type_system(gme_type(gGmePlayer));
+    return env->NewStringUTF(sysName ? sysName : "Unknown");
+  } else if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    std::vector<PLR_DEV_INFO> devs;
+    if (gVgmPlayer->GetSongDeviceInfo(devs) <= 0x01) {
+      int channelCounter = 0;
+      for (auto &dev : devs) {
+        int devChannelCount = 0;
+        if (dev.devDecl) {
+          switch (dev.type) {
+            case DEVID_SN76496: devChannelCount = 4; break;
+            case DEVID_AY8910: devChannelCount = 3; break;
+            case DEVID_YM2413: devChannelCount = 9; break;
+            case DEVID_YM2612: devChannelCount = 6; break;
+            case DEVID_YM2151: devChannelCount = 8; break;
+            case DEVID_VBOY_VSU: devChannelCount = 8; break;
+            case DEVID_YM2203: devChannelCount = 3; break;
+            case DEVID_YM2608: devChannelCount = 12; break;
+            case DEVID_YM2610: devChannelCount = 12; break;
+            case DEVID_RF5C68: devChannelCount = 8; break;
+            case DEVID_SAA1099: devChannelCount = 6; break;
+            case DEVID_32X_PWM: devChannelCount = 1; break;
+            case DEVID_MSM6258: devChannelCount = 1; break;
+            case DEVID_MSM6295: devChannelCount = 1; break;
+            case DEVID_K054539: devChannelCount = 8; break;
+            case DEVID_QSOUND: devChannelCount = 16; break;
+            case DEVID_NES_APU: devChannelCount = 5; break;
+            case DEVID_SEGAPCM: devChannelCount = 16; break;
+            case DEVID_K051649: devChannelCount = 8; break;
+            default: break;
+          }
+        }
+        
+        if (index >= channelCounter && index < channelCounter + devChannelCount) {
+          const char *name = (dev.devDecl && dev.devDecl->name)
+                                 ? dev.devDecl->name(dev.devCfg)
+                                 : "Unknown";
+          return env->NewStringUTF(name ? name : "Unknown");
+        }
+        
+        channelCounter += devChannelCount;
+      }
+    }
+  }
+  return env->NewStringUTF("");
+}
+
+JNIEXPORT jstring JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelName(
+    JNIEnv *env, jclass cls, jint index) {
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    const char* voiceName = gme_voice_name(gGmePlayer, index);
+    return env->NewStringUTF(voiceName ? voiceName : "Unknown");
+  } else if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    std::vector<PLR_DEV_INFO> devs;
+    if (gVgmPlayer->GetSongDeviceInfo(devs) <= 0x01) {
+      int channelCounter = 0;
+      for (auto &dev : devs) {
+        int devChannelCount = 0;
+        if (dev.devDecl) {
+          switch (dev.type) {
+            case DEVID_SN76496: devChannelCount = 4; break;
+            case DEVID_AY8910: devChannelCount = 3; break;
+            case DEVID_YM2413: devChannelCount = 9; break;
+            case DEVID_YM2612: devChannelCount = 6; break;
+            case DEVID_YM2151: devChannelCount = 8; break;
+            case DEVID_VBOY_VSU: devChannelCount = 8; break;
+            case DEVID_YM2203: devChannelCount = 3; break;
+            case DEVID_YM2608: devChannelCount = 12; break;
+            case DEVID_YM2610: devChannelCount = 12; break;
+            case DEVID_RF5C68: devChannelCount = 8; break;
+            case DEVID_SAA1099: devChannelCount = 6; break;
+            case DEVID_32X_PWM: devChannelCount = 1; break;
+            case DEVID_MSM6258: devChannelCount = 1; break;
+            case DEVID_MSM6295: devChannelCount = 1; break;
+            case DEVID_K054539: devChannelCount = 8; break;
+            case DEVID_QSOUND: devChannelCount = 16; break;
+            case DEVID_NES_APU: devChannelCount = 5; break;
+            case DEVID_SEGAPCM: devChannelCount = 16; break;
+            case DEVID_K051649: devChannelCount = 8; break;
+            default: break;
+          }
+        }
+        
+        if (index >= channelCounter && index < channelCounter + devChannelCount) {
+          int channelInDev = index - channelCounter;
+          char buffer[64];
+          snprintf(buffer, sizeof(buffer), "Channel %d", channelInDev + 1);
+          return env->NewStringUTF(buffer);
+        }
+        
+        channelCounter += devChannelCount;
+      }
+    }
+  }
+  return env->NewStringUTF("");
+}
+
+JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nIsChannelMuted(
+    JNIEnv *env, jclass cls, jint index) {
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    if (index >= 0 && index < gGmeMutedChannels.size()) {
+      return gGmeMutedChannels[index] ? JNI_TRUE : JNI_FALSE;
+    }
+    return JNI_FALSE;
+  } else if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    std::vector<PLR_DEV_INFO> devs;
+    if (gVgmPlayer->GetSongDeviceInfo(devs) <= 0x01) {
+      int channelCounter = 0;
+      for (auto &dev : devs) {
+        int devChannelCount = 0;
+        if (dev.devDecl) {
+          switch (dev.type) {
+            case DEVID_SN76496: devChannelCount = 4; break;
+            case DEVID_AY8910: devChannelCount = 3; break;
+            case DEVID_YM2413: devChannelCount = 9; break;
+            case DEVID_YM2612: devChannelCount = 6; break;
+            case DEVID_YM2151: devChannelCount = 8; break;
+            case DEVID_VBOY_VSU: devChannelCount = 8; break;
+            case DEVID_YM2203: devChannelCount = 3; break;
+            case DEVID_YM2608: devChannelCount = 12; break;
+            case DEVID_YM2610: devChannelCount = 12; break;
+            case DEVID_RF5C68: devChannelCount = 8; break;
+            case DEVID_SAA1099: devChannelCount = 6; break;
+            case DEVID_32X_PWM: devChannelCount = 1; break;
+            case DEVID_MSM6258: devChannelCount = 1; break;
+            case DEVID_MSM6295: devChannelCount = 1; break;
+            case DEVID_K054539: devChannelCount = 8; break;
+            case DEVID_QSOUND: devChannelCount = 16; break;
+            case DEVID_NES_APU: devChannelCount = 5; break;
+            case DEVID_SEGAPCM: devChannelCount = 16; break;
+            case DEVID_K051649: devChannelCount = 8; break;
+            default: break;
+          }
+        }
+        
+        if (index >= channelCounter && index < channelCounter + devChannelCount) {
+          int channelInDev = index - channelCounter;
+          PLR_DEV_OPTS devOpts;
+          if (gVgmPlayer->GetDeviceOptions(dev.id, devOpts) <= 0x01) {
+            // Check if channel is muted in main device or linked device
+            bool isMuted = (devOpts.muteOpts.chnMute[0] & (1 << channelInDev)) != 0 ||
+                          (devOpts.muteOpts.chnMute[1] & (1 << channelInDev)) != 0;
+            return isMuted ? JNI_TRUE : JNI_FALSE;
+          }
+          return JNI_FALSE;
+        }
+        
+        channelCounter += devChannelCount;
+      }
+    }
+  }
+  return JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetChannelMuted(
+    JNIEnv *env, jclass cls, jint index, jboolean muted) {
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    gme_mute_voice(gGmePlayer, index, muted ? 1 : 0);
+    if (index >= 0 && index < gGmeMutedChannels.size()) {
+      gGmeMutedChannels[index] = muted;
+    } else if (index >= gGmeMutedChannels.size()) {
+      gGmeMutedChannels.resize(index + 1, false);
+      gGmeMutedChannels[index] = muted;
+    }
+  } else if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    std::vector<PLR_DEV_INFO> devs;
+    if (gVgmPlayer->GetSongDeviceInfo(devs) <= 0x01) {
+      int channelCounter = 0;
+      for (auto &dev : devs) {
+        int devChannelCount = 0;
+        if (dev.devDecl) {
+          switch (dev.type) {
+            case DEVID_SN76496: devChannelCount = 4; break;
+            case DEVID_AY8910: devChannelCount = 3; break;
+            case DEVID_YM2413: devChannelCount = 9; break;
+            case DEVID_YM2612: devChannelCount = 6; break;
+            case DEVID_YM2151: devChannelCount = 8; break;
+            case DEVID_VBOY_VSU: devChannelCount = 8; break;
+            case DEVID_YM2203: devChannelCount = 3; break;
+            case DEVID_YM2608: devChannelCount = 12; break;
+            case DEVID_YM2610: devChannelCount = 12; break;
+            case DEVID_RF5C68: devChannelCount = 8; break;
+            case DEVID_SAA1099: devChannelCount = 6; break;
+            case DEVID_32X_PWM: devChannelCount = 1; break;
+            case DEVID_MSM6258: devChannelCount = 1; break;
+            case DEVID_MSM6295: devChannelCount = 1; break;
+            case DEVID_K054539: devChannelCount = 8; break;
+            case DEVID_QSOUND: devChannelCount = 16; break;
+            case DEVID_NES_APU: devChannelCount = 5; break;
+            case DEVID_SEGAPCM: devChannelCount = 16; break;
+            case DEVID_K051649: devChannelCount = 8; break;
+            default: break;
+          }
+        }
+        
+        if (index >= channelCounter && index < channelCounter + devChannelCount) {
+          int channelInDev = index - channelCounter;
+          PLR_DEV_OPTS devOpts;
+          if (gVgmPlayer->GetDeviceOptions(dev.id, devOpts) <= 0x01) {
+            if (muted) {
+              devOpts.muteOpts.chnMute[0] |= (1 << channelInDev);
+            } else {
+              devOpts.muteOpts.chnMute[0] &= ~(1 << channelInDev);
+            }
+            gVgmPlayer->SetDeviceOptions(dev.id, devOpts);
+          }
+          break;
+        }
+        
+        channelCounter += devChannelCount;
+      }
+    }
+  }
 }
 
 // libgme-specific: get track count for multi-track files (NSF, GBS, etc.)

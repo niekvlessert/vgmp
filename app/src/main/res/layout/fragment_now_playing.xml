@@ -269,5 +269,24 @@
                 android:orientation="vertical"
                 android:layout_marginTop="8dp" />
 
+            <!-- Channels header and container -->
+            <TextView
+                android:id="@+id/tv_channels_header"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="Channels"
+                android:textColor="@color/vgmp_accent"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/channels_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="8dp" />
+
         </LinearLayout>
 </androidx.core.widget.NestedScrollView>
