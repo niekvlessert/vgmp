@@ -27,4 +27,16 @@
     <string name="loop_current_track">Loop current track</string>
     <string name="loop_current_game">Loop current game</string>
     <string name="loop_off">Loop off</string>
+    <!-- Import/Export -->
+    <string name="import_library">Import Library</string>
+    <string name="export_library">Export Library</string>
+    <string name="export_success">Exported %d games successfully</string>
+    <string name="import_success">Imported %d games successfully</string>
+    <string name="export_failed">Export failed</string>
+    <string name="import_failed">Import failed</string>
+    <string name="no_games_to_export">No games to export</string>
+    <string name="select_export_location">Select export location</string>
+    <string name="select_import_file">Select import file</string>
+    <string name="exporting">Exporting…</string>
+    <string name="importing">Importing…</string>
 </resources>

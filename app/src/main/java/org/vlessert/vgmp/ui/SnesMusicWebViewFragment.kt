@@ -128,9 +128,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
         val spcNowFromDownloadUrl = Regex("[?&]spcNow=([^&]+)").find(url)?.groupValues?.get(1)
         val gameId = spcNowFromDownloadUrl ?: currentSpcNow
         
-        android.util.Log.d("SnesMusicWebView", "=== DOWNLOAD STARTED ===")
-        android.util.Log.d("SnesMusicWebView", "Download URL: $url")
-        android.util.Log.d("SnesMusicWebView", "Game ID (spcNow): $gameId")
         
         lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -140,7 +137,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
                 } else {
                     URLUtil.guessFileName(url, null, ".rsn")
                 }
-                android.util.Log.d("SnesMusicWebView", "Using filename: $fileName")
                 
                 val connection = URL(url).openConnection() as HttpURLConnection
                 connection.setRequestProperty("User-Agent", userAgent)
@@ -148,7 +144,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
                 connection.readTimeout = 30000
                 
                 val responseCode = connection.responseCode
-                android.util.Log.d("SnesMusicWebView", "Response code: $responseCode")
                 
                 if (responseCode !in 200..299) {
                     throw Exception("Server returned error: $responseCode")
@@ -160,7 +155,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
                         input.copyTo(output)
                     }
                 }
-                android.util.Log.d("SnesMusicWebView", "Downloaded ${tempFile.length()} bytes to ${tempFile.absolutePath}")
                 
                 // Import the RSN file into the library
                 GameLibrary.init(requireContext())
@@ -172,7 +166,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
                 var screenshotPath: String? = null
                 if (!gameId.isNullOrEmpty()) {
                     val screenshotUrl = "http://snesmusic.org/v2/images/screenshots/$gameId.png"
-                    android.util.Log.d("SnesMusicWebView", "Attempting to download screenshot: $screenshotUrl")
                     
                     try {
                         val screenshotConnection = URL(screenshotUrl).openConnection() as HttpURLConnection
@@ -190,7 +183,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
                                 }
                             }
                             screenshotPath = screenshotFile.absolutePath
-                            android.util.Log.d("SnesMusicWebView", "Downloaded screenshot to $screenshotPath")
                         }
                     } catch (e: Exception) {
                         android.util.Log.w("SnesMusicWebView", "Failed to download screenshot: ${e.message}")
@@ -257,7 +249,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
         val spcNowMatch = Regex("[?&]spcNow=([^&]+)").find(url)
         if (spcNowMatch != null) {
             currentSpcNow = spcNowMatch.groupValues[1]
-            android.util.Log.d("SnesMusicWebView", "Tracked spcNow: $currentSpcNow from URL: $url")
         }
     }
     
@@ -288,7 +279,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
                 return JSON.stringify({gameName: gameName, rsnLink: rsnLink});
             })();
         """) { result ->
-            android.util.Log.d("SnesMusicWebView", "Page game info: $result")
         }
     }
 
@@ -349,7 +339,6 @@ class SnesMusicWebViewFragment : DialogFragment() {
 
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val url = request?.url.toString()
-            android.util.Log.d("SnesMusicWebView", "shouldOverrideUrlLoading: $url")
             // Extract spcNow from navigation URLs too
             extractSpcNow(url)
             // Handle RSN file downloads

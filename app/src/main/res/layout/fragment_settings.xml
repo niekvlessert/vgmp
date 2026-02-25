@@ -274,6 +274,47 @@
                     android:layout_marginTop="4dp" />
             </LinearLayout>
 
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="16dp"
+                android:background="@color/vgmp_divider" />
+
+            <!-- Library Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Library"
+                android:textColor="@color/vgmp_accent"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="8dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_import"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/import_library"
+                    android:layout_marginEnd="8dp"
+                    app:icon="@drawable/ic_import" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_export"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/export_library"
+                    app:icon="@drawable/ic_export" />
+            </LinearLayout>
+
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

@@ -11,7 +11,11 @@ import kotlinx.coroutines.withContext
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.settings.SettingsManager
 import java.io.*
+import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import org.json.JSONArray
+import org.json.JSONObject
 
 private const val TAG = "GameLibrary"
 private const val MAX_SEARCH_RESULTS = 50
@@ -1248,7 +1252,6 @@ object GameLibrary {
         val oldGameName = "Doom MUS files"
         val oldGame = db.gameDao().searchGames(oldGameName).firstOrNull()
         if (oldGame != null) {
-            Log.d(TAG, "Migrating: removing old '$oldGameName' game")
             db.gameDao().deleteGameById(oldGame.id)
             // Also delete the folder
             val oldFolder = File(gamesDir, oldGameName)
@@ -1269,7 +1272,6 @@ object GameLibrary {
             // Copy to games directory so it can be found by the native code
             val gamesGenmidi = File(gamesDir, genmidiAsset)
             tempGenmidi.copyTo(gamesGenmidi, overwrite = false)
-            Log.d(TAG, "GENMIDI.lmp copied to games directory")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to copy GENMIDI.lmp", e)
         }
@@ -1304,7 +1306,6 @@ object GameLibrary {
             }
         }
         if (importedCount > 0) {
-            Log.d(TAG, "Imported $importedCount new MUS files to $gameName")
         }
     }
     
@@ -1448,7 +1449,6 @@ object GameLibrary {
                             archive.extractFile(header, out)
                         }
                         vgmFiles.add(outFile)
-                        Log.d(TAG, "Extracted SPC from RSN: ${outFile.name}")
                     }
                 }
                 header = archive.nextFileHeader()
@@ -1479,12 +1479,10 @@ object GameLibrary {
         }
     
     private suspend fun _importRsn(inputStream: InputStream, rsnName: String): Game? {
-        Log.d(TAG, "Starting RSN import for: $rsnName")
         
         // Use RSN stem as folder name
         val folderName = rsnName.removeSuffix(".rsn").removeSuffix(".RSN")
         val gameFolder = File(gamesDir, sanitizeFilename(folderName)).also { it.mkdirs() }
-        Log.d(TAG, "Game folder: ${gameFolder.absolutePath}")
         
         // Save the RSN file temporarily
         val tempRsnFile = File(gameFolder, "temp.rsn")
@@ -1493,7 +1491,6 @@ object GameLibrary {
                 input.copyTo(output)
             }
         }
-        Log.d(TAG, "Saved temp RSN file: ${tempRsnFile.absolutePath}, size: ${tempRsnFile.length()} bytes")
         
         // Extract SPC files from the RSN using Junrar.extract()
         val vgmFiles = mutableListOf<File>()
@@ -1503,19 +1500,16 @@ object GameLibrary {
         var systemName = "Super Nintendo"
         
         try {
-            Log.d(TAG, "Extracting RSN archive with Junrar.extract()...")
             // Use the simpler Junrar.extract method
             com.github.junrar.Junrar.extract(tempRsnFile, gameFolder)
             
             // Now scan the extracted files
             gameFolder.listFiles()?.forEach { file ->
                 val name = file.name.lowercase()
-                Log.d(TAG, "Found extracted file: ${file.name}")
                 
                 when {
                     name.endsWith(".spc") -> {
                         vgmFiles.add(file)
-                        Log.d(TAG, "Found SPC file: ${file.name}")
                     }
                     name == "info.txt" -> {
                         // Parse info.txt for game details
@@ -1533,7 +1527,6 @@ object GameLibrary {
                                         yearStr = line.substringAfter(":").trim()
                                 }
                             }
-                            Log.d(TAG, "Parsed info.txt: game=$gameName, author=$authorName, year=$yearStr")
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to parse info.txt", e)
                         }
@@ -1541,7 +1534,6 @@ object GameLibrary {
                 }
             }
             
-            Log.d(TAG, "RSN extraction complete, found ${vgmFiles.size} SPC files")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to extract RSN file: $rsnName", e)
         }
@@ -1632,7 +1624,269 @@ object GameLibrary {
         )
         db.gameDao().updateGame(finalGameEntity)
         
-        Log.d(TAG, "Imported RSN: $gameName with ${trackEntities.size} tracks")
         return Game(finalGameEntity, trackEntities, null)
     }
+
+    /**
+     * Export all games to a ZIP file with a JSON manifest.
+     * Returns the output file on success, null on failure.
+     */
+    suspend fun exportAllToZip(outputFile: File): Boolean = withContext(Dispatchers.IO) {
+        try {
+            
+            val allGames = db.gameDao().getAllGames()
+            if (allGames.isEmpty()) {
+                Log.w(TAG, "No games to export")
+                return@withContext false
+            }
+
+
+            val addedEntries = mutableSetOf<String>()
+            
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(outputFile))).use { zos ->
+                // Create manifest
+                val manifest = JSONObject().apply {
+                    put("version", 1)
+                    put("exportedAt", System.currentTimeMillis())
+                    put("gameCount", allGames.size)
+                }
+
+                val gamesArray = JSONArray()
+
+                // Export each game
+                for (gameEntity in allGames) {
+                    val gameFolder = File(gameEntity.folderPath)
+                    
+                    if (!gameFolder.exists()) {
+                        Log.w(TAG, "Game folder does not exist, skipping: ${gameEntity.name}")
+                        continue
+                    }
+
+                    val tracks = db.trackDao().getTracksForGame(gameEntity.id)
+                    
+                    val gameJson = JSONObject().apply {
+                        put("name", gameEntity.name)
+                        put("system", gameEntity.system)
+                        put("author", gameEntity.author)
+                        put("year", gameEntity.year)
+                        put("soundChips", gameEntity.soundChips)
+                        put("folderName", gameFolder.name)
+
+                        // Export artwork if exists
+                        if (gameEntity.artPath.isNotEmpty()) {
+                            val artFile = File(gameEntity.artPath)
+                            if (artFile.exists()) {
+                                put("artFileName", artFile.name)
+                                val artEntry = "art/${artFile.name}"
+                                if (!addedEntries.contains(artEntry)) {
+                                    addFileToZip(zos, artFile, artEntry)
+                                    addedEntries.add(artEntry)
+                                }
+                            }
+                        }
+
+                        // Export tracks
+                        val tracksArray = JSONArray()
+                        for (track in tracks) {
+                            val trackFile = File(track.filePath)
+                            
+                            if (trackFile.exists()) {
+                                val relativePath = "games/${gameFolder.name}/${trackFile.name}"
+                                if (!addedEntries.contains(relativePath)) {
+                                    addFileToZip(zos, trackFile, relativePath)
+                                    addedEntries.add(relativePath)
+                                }
+
+                                val trackJson = JSONObject().apply {
+                                    put("title", track.title)
+                                    put("fileName", trackFile.name)
+                                    put("trackIndex", track.trackIndex)
+                                    put("durationSamples", track.durationSamples)
+                                    put("isFavorite", track.isFavorite)
+                                }
+                                tracksArray.put(trackJson)
+                            }
+                        }
+                        put("tracks", tracksArray)
+                    }
+                    gamesArray.put(gameJson)
+                }
+
+                manifest.put("games", gamesArray)
+
+                // Add manifest to ZIP
+                val manifestBytes = manifest.toString(2).toByteArray(Charsets.UTF_8)
+                val manifestEntry = ZipEntry("manifest.json")
+                zos.putNextEntry(manifestEntry)
+                zos.write(manifestBytes)
+                zos.closeEntry()
+            }
+
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Export failed", e)
+            outputFile.delete()
+            // Rethrow the exception to provide more details to UI
+            throw e
+        }
+    }
+
+    private fun addFileToZip(zos: ZipOutputStream, file: File, entryName: String) {
+        val entry = ZipEntry(entryName)
+        zos.putNextEntry(entry)
+        file.inputStream().use { it.copyTo(zos) }
+        zos.closeEntry()
+    }
+
+    /**
+     * Import games from an exported ZIP file.
+     * Returns the number of games imported on success, -1 on failure.
+     */
+    suspend fun importFromZip(inputFile: File): Int = withContext(Dispatchers.IO) {
+        try {
+            var gameCount = 0
+
+            ZipInputStream(BufferedInputStream(FileInputStream(inputFile))).use { zis ->
+                // First pass: extract all files to temp location
+                val tempExtractDir = File(appContext.cacheDir, "import_${System.currentTimeMillis()}")
+                tempExtractDir.mkdirs()
+
+                var entry = zis.nextEntry
+                val extractedFiles = mutableMapOf<String, File>() // entryName -> file
+
+                while (entry != null) {
+                    if (!entry.isDirectory) {
+                        val outFile = File(tempExtractDir, entry.name)
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { fos ->
+                            zis.copyTo(fos)
+                        }
+                        extractedFiles[entry.name] = outFile
+                    }
+                    entry = zis.nextEntry
+                }
+
+                // Read manifest
+                val manifestFile = extractedFiles["manifest.json"]
+                if (manifestFile == null) {
+                    Log.e(TAG, "No manifest.json found in import file")
+                    tempExtractDir.deleteRecursively()
+                    return@withContext -1
+                }
+
+                val manifest = JSONObject(manifestFile.readText())
+                val gamesArray = manifest.getJSONArray("games")
+
+                // Import each game
+                for (i in 0 until gamesArray.length()) {
+                    val gameJson = gamesArray.getJSONObject(i)
+                    val gameName = gameJson.getString("name")
+                    val folderName = gameJson.getString("folderName")
+
+                    // Create game folder in library
+                    val gameFolder = File(gamesDir, sanitizeFilename(folderName)).also { it.mkdirs() }
+
+                    // Copy extracted files to game folder
+                    val gameFilesDir = File(tempExtractDir, "games/$folderName")
+                    if (gameFilesDir.exists()) {
+                        gameFilesDir.listFiles()?.forEach { file ->
+                            if (!file.isDirectory) {
+                                val destFile = File(gameFolder, file.name)
+                                file.copyTo(destFile, overwrite = true)
+                            }
+                        }
+                    }
+
+                    // Copy artwork if exists
+                    val artFileName = gameJson.optString("artFileName", "")
+                    var artPath = ""
+                    if (artFileName.isNotEmpty()) {
+                        val artSource = File(tempExtractDir, "art/$artFileName")
+                        if (artSource.exists()) {
+                            val destArt = File(gameFolder, artFileName)
+                            artSource.copyTo(destArt, overwrite = true)
+                            artPath = destArt.absolutePath
+                        }
+                    }
+
+                    // Import tracks to database
+                    val tracksArray = gameJson.getJSONArray("tracks")
+                    val trackEntities = mutableListOf<TrackEntity>()
+
+                    // Check if game already exists (by exact name or path)
+                    val existingByName = db.gameDao().findGameByName(gameName)
+                    if (existingByName != null) {
+                        continue // Skip to next game
+                    }
+                    
+                    val existingByPath = db.gameDao().findByPath(gameFolder.absolutePath)
+                    if (existingByPath != null) {
+                        continue // Skip to next game
+                    }
+
+                    // Create new game entry
+                    val gameEntity = GameEntity(
+                        name = gameName,
+                        system = gameJson.optString("system", ""),
+                        author = gameJson.optString("author", ""),
+                        year = gameJson.optString("year", ""),
+                        folderPath = gameFolder.absolutePath,
+                        artPath = artPath,
+                        zipSource = inputFile.name,
+                        soundChips = gameJson.optString("soundChips", "")
+                    )
+                    val gameId = db.gameDao().insertGame(gameEntity)
+
+                    // Insert tracks
+                    for (j in 0 until tracksArray.length()) {
+                        val trackJson = tracksArray.getJSONObject(j)
+                        val fileName = trackJson.getString("fileName")
+                        val trackFile = File(gameFolder, fileName)
+
+                        if (trackFile.exists()) {
+                            val trackEntity = TrackEntity(
+                                gameId = gameId,
+                                title = trackJson.getString("title"),
+                                filePath = trackFile.absolutePath,
+                                trackIndex = trackJson.getInt("trackIndex"),
+                                durationSamples = trackJson.optLong("durationSamples", 0),
+                                isFavorite = trackJson.optBoolean("isFavorite", false)
+                            )
+                            trackEntities.add(trackEntity)
+                            db.trackDao().insertTrack(trackEntity)
+                        }
+                    }
+
+                    gameCount++
+                }
+
+                // Cleanup temp directory
+                tempExtractDir.deleteRecursively()
+            }
+
+            gameCount
+        } catch (e: Exception) {
+            Log.e(TAG, "Import failed", e)
+            -1
+        }
+    }
 }
+
+private data class ExportGameInfo(
+    val name: String,
+    val system: String,
+    val author: String,
+    val year: String,
+    val soundChips: String,
+    val folderName: String,
+    val artFileName: String,
+    val tracks: List<ExportTrackInfo>
+)
+
+private data class ExportTrackInfo(
+    val title: String,
+    val fileName: String,
+    val trackIndex: Int,
+    val durationSamples: Long,
+    val isFavorite: Boolean
+)
