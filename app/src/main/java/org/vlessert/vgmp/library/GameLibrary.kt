@@ -21,11 +21,14 @@ private val KSS_EXTENSIONS = listOf(".kss", ".mgs", ".bgm", ".opx", ".mpk", ".mb
 private val TRACKER_EXTENSIONS = listOf(".mod", ".xm", ".s3m", ".it", ".mptm", ".stm", ".far", ".ult", ".med", ".mtm", ".psm", ".amf", ".okt", ".dsm", ".dtm", ".umx")
 // MIDI files are handled by libADLMIDI (OPL3 FM synthesis)
 private val MIDI_EXTENSIONS = listOf(".mid", ".midi", ".rmi", ".smf")
+// MUS files are Doom music files handled by libMusDoom (OPL2/OPL3 FM synthesis)
+private val MUS_EXTENSIONS = listOf(".mus", ".lmp")
 // RSN files are RAR archives containing SPC files
 private val RSN_EXTENSIONS = listOf(".rsn")
-private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS + MIDI_EXTENSIONS + RSN_EXTENSIONS
+private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS + MIDI_EXTENSIONS + MUS_EXTENSIONS + RSN_EXTENSIONS
 private const val TRACKER_GAME_NAME = "Tracker files"
 private const val MIDI_GAME_NAME = "MIDI files"
+private const val MUS_GAME_NAME = "Doom MUS files"
 
 // Data class for vigamup gameinfo
 data class VigamupGameInfo(
@@ -747,6 +750,17 @@ object GameLibrary {
         db.gameDao().searchGames(name).isNotEmpty()
     }
     
+    /** Update the art path for a game */
+    suspend fun updateGameArtPath(gameId: Long, artPath: String) = withContext(Dispatchers.IO) {
+        db.gameDao().updateArtPath(gameId, artPath)
+    }
+    
+    /** Delete a game and all its tracks */
+    suspend fun deleteGame(gameId: Long) = withContext(Dispatchers.IO) {
+        db.trackDao().deleteTracksForGame(gameId)
+        db.gameDao().deleteGameById(gameId)
+    }
+    
     /**
      * Import a single audio file (NSF, VGM, etc.) directly without a ZIP.
      * Creates a game entry with a single track.
@@ -1019,6 +1033,160 @@ object GameLibrary {
                     tempFile.delete()
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to load bundled tracker file $assetPath", e)
+                }
+            }
+        }
+    
+    /**
+     * Import a MUS file (Doom music) into the special "Doom MUS files" game.
+     * MUS files are grouped together under a single game entry.
+     */
+    suspend fun importMusFile(file: File): Game? = withContext(Dispatchers.IO) {
+        try {
+            _importMusFile(file)
+        } catch (e: Exception) {
+            Log.e(TAG, "importMusFile failed for ${file.name}", e)
+            null
+        }
+    }
+    
+    private suspend fun _importMusFile(file: File): Game? {
+        // Get or create the "Doom MUS files" game entry
+        var musGame = db.gameDao().searchGames(MUS_GAME_NAME).firstOrNull()
+        
+        val musFolder = File(gamesDir, sanitizeFilename(MUS_GAME_NAME)).also { it.mkdirs() }
+        
+        // Copy file to MUS folder
+        val destFile = File(musFolder, file.name)
+        file.copyTo(destFile, overwrite = true)
+        
+        // Also ensure GENMIDI.lmp exists in the MUS folder (required for OPL synthesis)
+        val genmidiFile = File(musFolder, "GENMIDI.lmp")
+        if (!genmidiFile.exists()) {
+            try {
+                // Try to copy from assets
+                val tempGenmidi = File(gamesDir, "GENMIDI.lmp")
+                if (tempGenmidi.exists()) {
+                    tempGenmidi.copyTo(genmidiFile, overwrite = false)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not copy GENMIDI.lmp to MUS folder")
+            }
+        }
+        
+        VgmEngine.setSampleRate(44100)
+        
+        // Get tags from MUS file
+        var trackTitle = file.nameWithoutExtension
+        var authorName = "id Software"
+        var systemName = "Doom (OPL3)"
+        
+        try {
+            if (VgmEngine.open(destFile.absolutePath)) {
+                val tags = VgmEngine.parseTags(VgmEngine.getTags())
+                if (tags.trackEn.isNotEmpty()) trackTitle = tags.trackEn
+                if (tags.authorEn.isNotEmpty()) authorName = tags.authorEn
+                VgmEngine.close()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not get tags from MUS file ${file.name}")
+        }
+        
+        // Get duration
+        val durationSamples = try {
+            VgmEngine.getTrackLengthDirect(destFile.absolutePath)
+        } catch (e: Exception) { 
+            Log.e(TAG, "Failed to get duration for ${destFile.name}", e)
+            -1L 
+        }
+        
+        if (musGame == null) {
+            // Create new "Doom MUS files" game
+            val gameEntity = GameEntity(
+                name = MUS_GAME_NAME,
+                system = "Doom (OPL3)",
+                author = "Various",
+                year = "1993",
+                folderPath = musFolder.absolutePath,
+                artPath = "",
+                zipSource = "mus_files"
+            )
+            val gameId = db.gameDao().insertGame(gameEntity)
+            
+            val trackEntity = TrackEntity(
+                id = 0,
+                gameId = gameId,
+                title = trackTitle,
+                filePath = destFile.absolutePath,
+                durationSamples = durationSamples,
+                trackIndex = 0,
+                isFavorite = false
+            )
+            db.trackDao().insertTrack(trackEntity)
+            
+            return Game(gameEntity.copy(id = gameId), listOf(trackEntity), null)
+        } else {
+            // Add to existing "Doom MUS files" game
+            val existingTracks = db.trackDao().getTracksForGame(musGame.id)
+            val nextIndex = existingTracks.size
+            
+            val trackEntity = TrackEntity(
+                id = 0,
+                gameId = musGame.id,
+                title = trackTitle,
+                filePath = destFile.absolutePath,
+                durationSamples = durationSamples,
+                trackIndex = nextIndex,
+                isFavorite = false
+            )
+            db.trackDao().insertTrack(trackEntity)
+            
+            val allTracks = db.trackDao().getTracksForGame(musGame.id)
+            return Game(musGame, allTracks, null)
+        }
+    }
+    
+    /**
+     * Load bundled MUS files from assets on first run.
+     * musFiles: list of asset paths like "D_E1M1.lmp"
+     */
+    suspend fun loadBundledMusFilesIfNeeded(context: Context, musFiles: List<String>) =
+        withContext(Dispatchers.IO) {
+            // Check if "Doom MUS files" game already exists
+            if (db.gameDao().searchGames(MUS_GAME_NAME).isNotEmpty()) {
+                return@withContext
+            }
+            
+            // First, copy GENMIDI.lmp to the games root directory (needed for OPL synthesis)
+            try {
+                val genmidiAsset = "GENMIDI.lmp"
+                val tempGenmidi = File(context.cacheDir, genmidiAsset)
+                context.assets.open(genmidiAsset).use { input ->
+                    tempGenmidi.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                // Copy to games directory so it can be found by the native code
+                val gamesGenmidi = File(gamesDir, genmidiAsset)
+                tempGenmidi.copyTo(gamesGenmidi, overwrite = false)
+                Log.d(TAG, "GENMIDI.lmp copied to games directory")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to copy GENMIDI.lmp", e)
+            }
+            
+            for (assetPath in musFiles) {
+                try {
+                    val fileName = assetPath.substringAfterLast('/')
+                    val tempFile = File(context.cacheDir, fileName)
+                    context.assets.open(assetPath).use { input ->
+                        tempFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    importMusFile(tempFile)
+                    tempFile.delete()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load bundled MUS file $assetPath", e)
                 }
             }
         }

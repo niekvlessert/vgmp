@@ -29,5 +29,12 @@ class VgmApplication : Application() {
                 "2nd_reality.s3m"
             ))
         }
+        
+        // Load bundled MUS files on first run (Doom music files)
+        applicationScope.launch {
+            GameLibrary.loadBundledMusFilesIfNeeded(this@VgmApplication, listOf(
+                "D_E1M1.lmp"
+            ))
+        }
     }
 }

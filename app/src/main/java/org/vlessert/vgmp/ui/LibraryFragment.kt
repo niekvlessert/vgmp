@@ -1,5 +1,6 @@
 package org.vlessert.vgmp.ui
 
+import android.app.AlertDialog
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.text.Editable
@@ -37,6 +38,7 @@ class LibraryFragment : Fragment() {
     private var isLoading = false
     private var currentQuery = ""
     private val pageSize = 20
+    private val selectedGames = mutableSetOf<Long>()
 
     companion object {
         fun newInstance() = LibraryFragment()
@@ -62,7 +64,12 @@ class LibraryFragment : Fragment() {
                     performSearch(binding.searchInput.text?.toString() ?: "")
                 }
             },
-            getCurrentlyPlayingTrack = { service?.currentTrack }
+            onGameLongClick = { game ->
+                toggleGameSelection(game.id)
+            },
+            getCurrentlyPlayingTrack = { service?.currentTrack },
+            isSelected = { gameId -> selectedGames.contains(gameId) },
+            isSelectionMode = { selectedGames.isNotEmpty() }
         )
         val layoutManager = LinearLayoutManager(requireContext())
         binding.recyclerGames.layoutManager = layoutManager
@@ -105,6 +112,62 @@ class LibraryFragment : Fragment() {
             performSearch("")
         }
         observePlaybackInfo()
+        
+        // Delete action bar buttons
+        binding.btnDelete.setOnClickListener {
+            showDeleteConfirmationDialog()
+        }
+        binding.btnCancelSelection.setOnClickListener {
+            clearSelection()
+        }
+    }
+    
+    private fun toggleGameSelection(gameId: Long) {
+        if (selectedGames.contains(gameId)) {
+            selectedGames.remove(gameId)
+        } else {
+            selectedGames.add(gameId)
+        }
+        updateSelectionActionBar()
+        adapter.notifyDataSetChanged()
+    }
+    
+    private fun updateSelectionActionBar() {
+        if (selectedGames.isNotEmpty()) {
+            binding.deleteActionBar.visibility = View.VISIBLE
+            binding.tvSelectionCount.text = "${selectedGames.size} selected"
+        } else {
+            binding.deleteActionBar.visibility = View.GONE
+        }
+    }
+    
+    private fun clearSelection() {
+        selectedGames.clear()
+        updateSelectionActionBar()
+        adapter.notifyDataSetChanged()
+    }
+    
+    private fun showDeleteConfirmationDialog() {
+        AlertDialog.Builder(requireContext())
+            .setTitle("Delete games?")
+            .setMessage("Are you sure you want to delete ${selectedGames.size} game(s)? This cannot be undone.")
+            .setPositiveButton("Yes") { _, _ ->
+                deleteSelectedGames()
+            }
+            .setNegativeButton("No", null)
+            .show()
+    }
+    
+    private fun deleteSelectedGames() {
+        lifecycleScope.launch {
+            val toDelete = selectedGames.toList()
+            toDelete.forEach { gameId ->
+                GameLibrary.deleteGame(gameId)
+            }
+            clearSelection()
+            service?.refreshGames()
+            performSearch(binding.searchInput.text?.toString() ?: "")
+        }
     }
 
     fun onServiceConnected(svc: VgmPlaybackService) {
@@ -175,7 +238,10 @@ class LibraryFragment : Fragment() {
 class GameAdapter(
     private val onTrackClick: (game: Game, track: TrackEntity, gameIdx: Int, trackIdx: Int) -> Unit,
     private val onFavoriteClick: (game: Game) -> Unit,
-    private val getCurrentlyPlayingTrack: () -> TrackEntity?
+    private val onGameLongClick: (game: Game) -> Unit,
+    private val getCurrentlyPlayingTrack: () -> TrackEntity?,
+    private val isSelected: (gameId: Long) -> Boolean,
+    private val isSelectionMode: () -> Boolean
 ) : RecyclerView.Adapter<GameAdapter.GameViewHolder>() {
 
     private var games: List<Game> = emptyList()
@@ -200,12 +266,24 @@ class GameAdapter(
     override fun onBindViewHolder(holder: GameViewHolder, position: Int) {
         val game = games[position]
         val globalIdx = allServiceGames.indexOfFirst { it.id == game.id }
-        holder.bind(game, globalIdx, expandedGames.contains(game.id), getCurrentlyPlayingTrack())
+        val selected = isSelected(game.id)
+        holder.bind(game, globalIdx, expandedGames.contains(game.id), getCurrentlyPlayingTrack(), selected)
+        
         holder.itemView.setOnClickListener {
-            if (expandedGames.contains(game.id)) expandedGames.remove(game.id)
-            else expandedGames.add(game.id)
-            notifyItemChanged(position)
+            if (isSelectionMode()) {
+                onGameLongClick(game)
+            } else {
+                if (expandedGames.contains(game.id)) expandedGames.remove(game.id)
+                else expandedGames.add(game.id)
+                notifyItemChanged(position)
+            }
         }
+        
+        holder.itemView.setOnLongClickListener {
+            onGameLongClick(game)
+            true
+        }
+        
         holder.btnFavorite.setOnClickListener {
             onFavoriteClick(game)
         }
@@ -226,8 +304,17 @@ class GameAdapter(
 
         fun setTrackClickListener(l: (TrackEntity, Int) -> Unit) { trackClickListener = l }
 
-        fun bind(game: Game, globalIdx: Int, expanded: Boolean, nowPlayingTrack: TrackEntity?) {
+        fun bind(game: Game, globalIdx: Int, expanded: Boolean, nowPlayingTrack: TrackEntity?, selected: Boolean) {
             nameView.text = game.name
+            
+            // Show selection state with elevation and background
+            if (selected) {
+                itemView.elevation = 8f
+                itemView.setBackgroundResource(R.drawable.game_selected_bg)
+            } else {
+                itemView.elevation = 0f
+                itemView.background = null
+            }
             
             // Show system type with filetype for all formats (VGM, NSF, SPC, etc.)
             val filetype = getFiletypeFromGame(game)
@@ -350,6 +437,8 @@ class GameAdapter(
                 path.endsWith(".mid") || path.endsWith(".midi") -> "MIDI"
                 path.endsWith(".rmi") -> "RMI"
                 path.endsWith(".smf") -> "SMF"
+                path.endsWith(".mus") -> "MUS"
+                path.endsWith(".lmp") -> "MUS"
                 else -> ""
             }
         }

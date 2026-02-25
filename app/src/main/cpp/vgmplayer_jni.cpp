@@ -1,9 +1,9 @@
 /*
  * vgmplayer_jni.cpp
  *
- * JNI glue layer between Android/Kotlin and libvgm/libgme/libopenmpt/libADLMIDI.
+ * JNI glue layer between Android/Kotlin and libvgm/libgme/libopenmpt/libADLMIDI/libMusDoom.
  * Supports VGM/VGZ via libvgm, NSF/NSFE/GBS/SPC/etc via libgme,
- * MOD/XM/S3M/IT/etc via libopenmpt, and MIDI via libADLMIDI.
+ * MOD/XM/S3M/IT/etc via libopenmpt, MIDI via libADLMIDI, and MUS via libMusDoom.
  */
 
 #include <algorithm>
@@ -37,11 +37,16 @@
 // libADLMIDI for MIDI files (OPL3 FM synthesis)
 #include "adlmidi.h"
 
+// libMusDoom for Doom MUS files (OPL2/OPL3 FM synthesis)
+#include "libmusdoom.h"
+#include "mus2mid.h"
+#include "memio.h"
+
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "VgmJNI", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VgmJNI", __VA_ARGS__)
 
 // Player type enumeration
-enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT, LIBKSS, LIBADLMIDI };
+enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT, LIBKSS, LIBADLMIDI, LIBMUSDOOM };
 
 static PlayerType gPlayerType = PlayerType::NONE;
 static VGMPlayer *gVgmPlayer = nullptr;
@@ -50,6 +55,9 @@ static openmpt_module *gOpenmptModule = nullptr;
 static KSS *gKss = nullptr;
 static KSSPLAY *gKssPlay = nullptr;
 static ADL_MIDIPlayer *gAdlPlayer = nullptr;
+static musdoom_emulator_t *gMusDoomPlayer = nullptr;
+static std::vector<uint8_t> gMusDoomData;  // MUS data must remain valid during playback
+static std::vector<uint8_t> gMusDoomMidiData;  // Converted MIDI data for MUS playback
 static DATA_LOADER *gLoader = nullptr;
 static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
@@ -230,6 +238,23 @@ static bool isMidiFormat(const char *path) {
           strcmp(lowerExt, "smf") == 0);
 }
 
+// Check if file extension is a MUS format (Doom music) supported by libMusDoom
+static bool isMusFormat(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext) return false;
+  ext++; // skip the dot
+  
+  // Convert to lowercase for comparison
+  char lowerExt[8] = {0};
+  for (int i = 0; ext[i] && i < 7; i++) {
+    lowerExt[i] = tolower(ext[i]);
+  }
+  
+  // MUS file formats - .mus is the standard, .lmp is commonly used for Doom lumps
+  return (strcmp(lowerExt, "mus") == 0 ||
+          strcmp(lowerExt, "lmp") == 0);
+}
+
 static void cleanup() {
   // Cleanup libvgm
   if (gVgmPlayer) {
@@ -266,6 +291,18 @@ static void cleanup() {
     adl_close(gAdlPlayer);
     gAdlPlayer = nullptr;
   }
+  
+  // Cleanup libMusDoom
+  if (gMusDoomPlayer) {
+    musdoom_stop(gMusDoomPlayer);
+    musdoom_unload(gMusDoomPlayer);
+    musdoom_destroy(gMusDoomPlayer);
+    gMusDoomPlayer = nullptr;
+  }
+  gMusDoomData.clear();
+  gMusDoomData.shrink_to_fit();
+  gMusDoomMidiData.clear();
+  gMusDoomMidiData.shrink_to_fit();
   
   gPlayerType = PlayerType::NONE;
   gGmeTrackIndex = 0;
@@ -523,6 +560,89 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     return JNI_TRUE;
   }
 
+  // Check if this is a MUS format for libMusDoom
+  if (isMusFormat(path)) {
+    LOGD("Detected MUS format: %s", path);
+    
+    // Save path before releasing - needed for GENMIDI lookup
+    std::string musFilePath = path;
+    
+    // Read the entire file into memory for libMusDoom
+    FILE *f = fopen(path, "rb");
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    if (!f) {
+      LOGE("Failed to open MUS file: %s", musFilePath.c_str());
+      return JNI_FALSE;
+    }
+    
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    LOGD("MUS file size: %ld bytes", fileSize);
+    
+    gMusDoomData.resize(fileSize);
+    if (fread(gMusDoomData.data(), 1, fileSize, f) != (size_t)fileSize) {
+      LOGE("Failed to read MUS file");
+      fclose(f);
+      gMusDoomData.clear();
+      return JNI_FALSE;
+    }
+    fclose(f);
+    
+    // Log first 16 bytes for debugging (MUS header starts with "MUS\x1a")
+    LOGD("MUS header: %02X %02X %02X %02X %02X %02X %02X %02X", 
+         gMusDoomData[0], gMusDoomData[1], gMusDoomData[2], gMusDoomData[3],
+         gMusDoomData[4], gMusDoomData[5], gMusDoomData[6], gMusDoomData[7]);
+    
+    // Convert MUS -> MIDI in memory (avoids libMusDoom playback hangs).
+    MEMFILE *musIn = mem_fopen_read(gMusDoomData.data(), gMusDoomData.size());
+    MEMFILE *midiOut = mem_fopen_write();
+    bool convertError = mus2mid(musIn, midiOut);
+
+    void *midiBuf = nullptr;
+    size_t midiSize = 0;
+    if (!convertError) {
+      mem_get_buf(midiOut, &midiBuf, &midiSize);
+    }
+    if (midiBuf && midiSize > 0) {
+      gMusDoomMidiData.assign(static_cast<uint8_t *>(midiBuf),
+                              static_cast<uint8_t *>(midiBuf) + midiSize);
+    }
+    mem_fclose(musIn);
+    mem_fclose(midiOut);
+
+    if (convertError || gMusDoomMidiData.empty()) {
+      LOGE("mus2mid conversion failed");
+      gMusDoomData.clear();
+      return JNI_FALSE;
+    }
+
+    // Play the converted MIDI with libADLMIDI (DMX bank)
+    gAdlPlayer = adl_init(gSampleRate);
+    if (!gAdlPlayer) {
+      LOGE("adl_init failed for MUS->MIDI");
+      gMusDoomMidiData.clear();
+      return JNI_FALSE;
+    }
+    adl_setNumChips(gAdlPlayer, 2);
+    adl_setBank(gAdlPlayer, 14);    // DMX bank
+    adl_setSoftPanEnabled(gAdlPlayer, 1);
+
+    int result = adl_openData(gAdlPlayer, gMusDoomMidiData.data(), (unsigned long)gMusDoomMidiData.size());
+    if (result != 0) {
+      LOGE("adl_openData (MUS->MIDI) failed: %s", adl_errorInfo(gAdlPlayer));
+      adl_close(gAdlPlayer);
+      gAdlPlayer = nullptr;
+      gMusDoomMidiData.clear();
+      return JNI_FALSE;
+    }
+
+    gPlayerType = PlayerType::LIBADLMIDI;
+    LOGD("nOpen: MUS->MIDI via libADLMIDI success, sampleRate=%u", gSampleRate);
+    return JNI_TRUE;
+  }
+
   // Use libvgm for VGM/VGZ files
   gLoader = FileLoader_Init(path);
   if (!gLoader) {
@@ -576,6 +696,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nPlay(JNIEnv *env, jclass cls) {
     gVgmPlayer->SetSampleRate(gSampleRate);
     gVgmPlayer->Start();
   }
+  if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
+    musdoom_resume(gMusDoomPlayer);
+  }
   // libgme doesn't have a separate play function - it plays via gme_play()
 }
 
@@ -583,6 +706,9 @@ JNIEXPORT void JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nStop(JNIEnv *env, jclass cls) {
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     gVgmPlayer->Stop();
+  }
+  if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
+    musdoom_stop(gMusDoomPlayer);
   }
   // libgme doesn't have a separate stop function
 }
@@ -617,6 +743,11 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
       return JNI_TRUE;
     }
     return JNI_FALSE;
+  }
+  if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
+    // libMusDoom: check if music is still playing
+    // MUS files loop by default when started with looping=1
+    return musdoom_is_playing(gMusDoomPlayer) ? JNI_FALSE : JNI_TRUE;
   }
   return JNI_TRUE;
 }
@@ -729,6 +860,15 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
     // Return 0 if duration unknown - let Kotlin code use stored duration
     return 0;
   }
+  if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
+    // MUS files have variable length - get from libMusDoom
+    uint32_t lengthMs = musdoom_get_length_ms(gMusDoomPlayer);
+    if (lengthMs > 0) {
+      return (jlong)lengthMs * gSampleRate / 1000;
+    }
+    // Return a reasonable default (2 minutes) if duration unknown
+    return (jlong)120 * gSampleRate;
+  }
   return 0;
 }
 
@@ -756,6 +896,10 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
   if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
     double positionSeconds = adl_positionTell(gAdlPlayer);
     return (jlong)(positionSeconds * gSampleRate);
+  }
+  if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
+    uint32_t positionMs = musdoom_get_position_ms(gMusDoomPlayer);
+    return (jlong)positionMs * gSampleRate / 1000;
   }
   return 0;
 }
@@ -801,6 +945,10 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
       KSSPLAY_calc_silent(gKssPlay, toCalc);
       remaining -= toCalc;
     }
+  }
+  if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
+    uint32_t positionMs = (uint32_t)(samplePos * 1000 / gSampleRate);
+    musdoom_seek_ms(gMusDoomPlayer, positionMs);
   }
 }
 
@@ -903,6 +1051,28 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
         float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
         gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
         gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      }
+    }
+  } else if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
+    // libMusDoom outputs stereo interleaved 16-bit
+    // musdoom_generate_samples returns number of stereo samples generated
+    size_t samplesGenerated = musdoom_generate_samples(gMusDoomPlayer, dst, frames);
+    if (samplesGenerated > 0) {
+      written = (jint)samplesGenerated;
+      
+      // Feed mono samples to FFT ring buffer
+      for (jint i = 0; i < written; i++) {
+        float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+        gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+        gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      }
+    } else {
+      static int musdoomZeroLogCounter = 0;
+      if (musdoomZeroLogCounter++ % 100 == 0) {
+        LOGE("libMusDoom generated 0 samples (playing=%d pos=%u ms len=%u ms)",
+             musdoom_is_playing(gMusDoomPlayer),
+             musdoom_get_position_ms(gMusDoomPlayer),
+             musdoom_get_length_ms(gMusDoomPlayer));
       }
     }
   }

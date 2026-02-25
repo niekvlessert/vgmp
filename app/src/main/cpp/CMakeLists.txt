@@ -100,6 +100,12 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libkss kss_build)
 set(LIBADLMIDI_STATIC ON CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libADLMIDI adlmidi_build)
 
+# Include libMusDoom for Doom MUS files (OPL2/OPL3 FM synthesis)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libMusDoom musdoom_build)
+
 # JNI glue shared library
 add_library(vgmplayer SHARED vgmplayer_jni.cpp)
 
@@ -112,6 +118,7 @@ target_include_directories(vgmplayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/libkss/src
     ${CMAKE_CURRENT_SOURCE_DIR}/libkss/modules
     ${CMAKE_CURRENT_SOURCE_DIR}/libADLMIDI/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/libMusDoom/src
 )
 
 target_link_libraries(vgmplayer
@@ -122,6 +129,7 @@ target_link_libraries(vgmplayer
     openmpt_static
     kss
     ADLMIDI_static
+    musdoom
     log
     android
     z

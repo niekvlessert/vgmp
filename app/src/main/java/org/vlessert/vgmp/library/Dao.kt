@@ -42,6 +42,12 @@ interface GameDao {
 
     @Query("DELETE FROM games")
     suspend fun deleteAll()
+
+    @Query("UPDATE games SET artPath = :artPath WHERE id = :gameId")
+    suspend fun updateArtPath(gameId: Long, artPath: String)
+
+    @Query("DELETE FROM games WHERE id = :gameId")
+    suspend fun deleteGameById(gameId: Long)
 }
 
 @Dao

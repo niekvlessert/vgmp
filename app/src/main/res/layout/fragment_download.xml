@@ -22,33 +22,25 @@
     <!-- VGM Rips Search Button -->
     <Button
         android:id="@+id/btn_vgmrips_search"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        style="@style/VGMP.Button.Green"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_margin="12dp"
-        android:text="Search VGM Rips Database"
-        android:textColor="@color/vgmp_accent"
+        android:text="search vgm rips database"
         android:drawableStart="@drawable/ic_search"
         android:drawablePadding="8dp"
-        android:gravity="center"
-        app:strokeColor="@color/vgmp_accent"
-        app:strokeWidth="1dp"
-        android:backgroundTint="@android:color/transparent" />
+        android:gravity="center" />
 
     <!-- SNES Music Archive Button -->
     <Button
         android:id="@+id/btn_snes_music"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        style="@style/VGMP.Button.Green"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="12dp"
         android:layout_marginBottom="12dp"
-        android:text="Browse SNES Music Archive"
-        android:textColor="@color/vgmp_accent"
-        android:gravity="center"
-        app:strokeColor="@color/vgmp_accent"
-        app:strokeWidth="1dp"
-        android:backgroundTint="@android:color/transparent" />
+        android:text="browse snes music archive"
+        android:gravity="center" />
 
     <TextView
         android:layout_width="match_parent"

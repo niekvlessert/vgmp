@@ -167,9 +167,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     private suspend fun extractRoms() = withContext(Dispatchers.IO) {
         val romsDir = File(filesDir, "roms").also { it.mkdirs() }
+        
+        // Extract yrw801.rom for libvgm
         val romFileName = "yrw801.rom"
         val destFile = File(romsDir, romFileName)
-
         if (!destFile.exists()) {
             try {
                 assets.open(romFileName).use { input ->
@@ -181,6 +182,22 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 Log.e(TAG, "Failed to extract $romFileName", e)
             }
         }
+        
+        // Extract GENMIDI.lmp for libMusDoom (Doom MUS playback)
+        val genmidiFileName = "GENMIDI.lmp"
+        val genmidiDestFile = File(romsDir, genmidiFileName)
+        if (!genmidiDestFile.exists()) {
+            try {
+                assets.open(genmidiFileName).use { input ->
+                    genmidiDestFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to extract $genmidiFileName", e)
+            }
+        }
+        
         VgmEngine.setRomPath(romsDir.absolutePath)
     }
 
@@ -1139,7 +1156,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     
     /**
      * Check if the current track supports playback speed control.
-     * KSS, tracker formats (MOD, XM, S3M, IT), and MIDI don't support speed control.
+     * KSS, tracker formats (MOD, XM, S3M, IT), MIDI, and MUS don't support speed control.
      */
     fun isSpeedControlSupported(): Boolean {
         val track = currentTrack ?: return false
@@ -1153,6 +1170,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         // MIDI files
         if (path.endsWith(".mid") || path.endsWith(".midi") ||
             path.endsWith(".rmi") || path.endsWith(".smf")) return false
+        // MUS files (Doom music)
+        if (path.endsWith(".mus") || path.endsWith(".lmp")) return false
         return true
     }
 }
