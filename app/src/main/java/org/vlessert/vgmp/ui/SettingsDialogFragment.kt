@@ -46,6 +46,12 @@ class SettingsDialogFragment : DialogFragment() {
         
         // Analyzer enabled
         binding.switchAnalyzerEnabled.isChecked = SettingsManager.isAnalyzerEnabled(context)
+
+        // Analyzer style
+        when (SettingsManager.getAnalyzerStyle(context)) {
+            SettingsManager.ANALYZER_STYLE_BARS -> binding.radioBars.isChecked = true
+            else -> binding.radioKaleidoscope.isChecked = true
+        }
         
         // Fade timeout
         val fadeTimeout = SettingsManager.getFadeTimeout(context)
@@ -61,6 +67,14 @@ class SettingsDialogFragment : DialogFragment() {
         
         binding.switchAnalyzerEnabled.setOnCheckedChangeListener { _, isChecked ->
             SettingsManager.setAnalyzerEnabled(context, isChecked)
+        }
+
+        binding.radioAnalyzerStyle.setOnCheckedChangeListener { _, checkedId ->
+            val style = when (checkedId) {
+                R.id.radio_bars -> SettingsManager.ANALYZER_STYLE_BARS
+                else -> SettingsManager.ANALYZER_STYLE_KALEIDOSCOPE
+            }
+            SettingsManager.setAnalyzerStyle(context, style)
         }
         
         binding.switchFavoritesOnly.setOnCheckedChangeListener { _, isChecked ->

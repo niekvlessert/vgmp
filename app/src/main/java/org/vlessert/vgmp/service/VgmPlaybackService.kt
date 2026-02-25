@@ -87,6 +87,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     // Render thread
     private val _spectrum = MutableStateFlow(FloatArray(512))
     val spectrum: StateFlow<FloatArray> = _spectrum.asStateFlow()
+    private val spectrumBuffer = FloatArray(512)
+    private var lastSpectrumUpdateMs = 0L
+    private val SPECTRUM_UPDATE_INTERVAL_MS = 33L // ~30 fps for smoother UI
 
     private var renderJob: Job? = null
     private val renderBuffer = ShortArray(BUFFER_FRAMES * 2)  // interleaved stereo
@@ -483,9 +486,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         audioTrack?.write(renderBuffer, 0, framesWritten * 2)
 
                         // Update spectrum for UI
-                        val spectrumBuffer = FloatArray(512)
-                        VgmEngine.getSpectrum(spectrumBuffer)
-                        _spectrum.emit(spectrumBuffer)
+                        val nowSpectrum = SystemClock.elapsedRealtime()
+                        if (nowSpectrum - lastSpectrumUpdateMs >= SPECTRUM_UPDATE_INTERVAL_MS) {
+                            lastSpectrumUpdateMs = nowSpectrum
+                            VgmEngine.getSpectrum(spectrumBuffer)
+                            _spectrum.emit(spectrumBuffer.copyOf())
+                        }
                     }
                     
                     // Periodically update playback state for position tracking (must be BEFORE endless loop check)

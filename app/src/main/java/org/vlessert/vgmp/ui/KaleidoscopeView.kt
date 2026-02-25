@@ -54,7 +54,7 @@ class KaleidoscopeView @JvmOverloads constructor(
 
     fun updateFFT(magnitudes: FloatArray) {
         spectrumData = magnitudes
-        invalidate()
+        postInvalidateOnAnimation()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -73,7 +73,7 @@ class KaleidoscopeView @JvmOverloads constructor(
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
         
         // Process magnitudes into bins
-        val binCount = 64
+        val binCount = 56
         val binned = FloatArray(binCount)
         val n = magnitudes.size
         
@@ -94,7 +94,10 @@ class KaleidoscopeView @JvmOverloads constructor(
             smoothedMagnitudes = binned
         } else {
             for (i in 0 until binCount) {
-                smoothedMagnitudes!![i] = smoothedMagnitudes!![i] * smoothingFactor + binned[i] * (1.0f - smoothingFactor)
+                val current = smoothedMagnitudes!![i]
+                val target = binned[i]
+                val alpha = if (target > current) 0.55f else 0.2f
+                smoothedMagnitudes!![i] = current + (target - current) * alpha
             }
         }
         

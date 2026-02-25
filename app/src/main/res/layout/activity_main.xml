@@ -13,6 +13,13 @@
         android:layout_height="match_parent"
         android:visibility="gone" />
 
+    <!-- Fullscreen Spectrum Bars Background -->
+    <org.vlessert.vgmp.ui.SpectrumBarsView
+        android:id="@+id/spectrumBarsView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <androidx.coordinatorlayout.widget.CoordinatorLayout
         android:id="@+id/main_content"
         android:layout_width="match_parent"

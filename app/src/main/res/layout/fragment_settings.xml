@@ -66,6 +66,42 @@
                 android:layout_height="1dp"
                 android:background="@color/vgmp_divider" />
 
+            <!-- Analyzer Style -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Analyzer Style"
+                android:textColor="@color/vgmp_text_primary"
+                android:textSize="16sp" />
+
+            <RadioGroup
+                android:id="@+id/radio_analyzer_style"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp">
+
+                <RadioButton
+                    android:id="@+id/radio_kaleidoscope"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Kaleidoscope"
+                    android:textColor="@color/vgmp_text_primary" />
+
+                <RadioButton
+                    android:id="@+id/radio_bars"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Prism Bars"
+                    android:textColor="@color/vgmp_text_primary" />
+            </RadioGroup>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="16dp"
+                android:background="@color/vgmp_divider" />
+
             <!-- Fade Timeout -->
             <TextView
                 android:layout_width="match_parent"

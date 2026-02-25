@@ -39,7 +39,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var playbackService: VgmPlaybackService? = null
     private var serviceBound = false
-    private var isKaleidoscopeVisible = false
+    private var isAnalyzerVisible = false
     
     // Auto-hide for main screen
     private var lastInteractionTime = System.currentTimeMillis()
@@ -99,11 +99,23 @@ class MainActivity : AppCompatActivity() {
             playbackService?.nextTrack()
         }
         
-        // Setup kaleidoscope touch listener
+        // Setup analyzer touch listener
         binding.kaleidoscopeView.setOnTouchListener { _, event ->
             if (event.action == MotionEvent.ACTION_DOWN) {
-                if (isKaleidoscopeVisible) {
-                    hideKaleidoscope()
+                if (isAnalyzerVisible) {
+                    hideAnalyzer()
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+        binding.spectrumBarsView.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                if (isAnalyzerVisible) {
+                    hideAnalyzer()
                     true
                 } else {
                     false
@@ -122,8 +134,8 @@ class MainActivity : AppCompatActivity() {
         binding.mainContent.setOnTouchListener { _, event ->
             if (event.action == MotionEvent.ACTION_DOWN) {
                 lastInteractionTime = System.currentTimeMillis()
-                if (isKaleidoscopeVisible) {
-                    hideKaleidoscope()
+                if (isAnalyzerVisible) {
+                    hideAnalyzer()
                 }
             }
             false
@@ -147,8 +159,8 @@ class MainActivity : AppCompatActivity() {
                 // - Music is actually playing
                 // - Inactivity timeout reached
                 val anyDialogOpen = isPlayerOpen || isSettingsOpen || isDownloadOpen || isVgmRipsOpen
-                if (timeout > 0 && !isKaleidoscopeVisible && !anyDialogOpen && isPlaying && System.currentTimeMillis() - lastInteractionTime >= timeout) {
-                    showKaleidoscope()
+                if (timeout > 0 && !isAnalyzerVisible && !anyDialogOpen && isPlaying && System.currentTimeMillis() - lastInteractionTime >= timeout) {
+                    showAnalyzer()
                 }
                 autoHideHandler.postDelayed(this, 1000)
             }
@@ -166,12 +178,15 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 svc.spectrum.collect { magnitudes ->
-                    if (isKaleidoscopeVisible) {
-                        // Hide kaleidoscope if music stopped
+                    if (isAnalyzerVisible) {
+                        // Hide analyzer if music stopped
                         if (!svc.playing) {
-                            hideKaleidoscope()
+                            hideAnalyzer()
                         } else {
-                            binding.kaleidoscopeView.updateFFT(magnitudes)
+                            when (SettingsManager.getAnalyzerStyle(this@MainActivity)) {
+                                SettingsManager.ANALYZER_STYLE_BARS -> binding.spectrumBarsView.updateFFT(magnitudes)
+                                else -> binding.kaleidoscopeView.updateFFT(magnitudes)
+                            }
                         }
                     }
                 }
@@ -179,12 +194,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    fun showKaleidoscope() {
+    private fun showAnalyzer() {
         // Only show if enabled and music is playing
         if (!SettingsManager.isAnalyzerEnabled(this)) return
         if (playbackService?.playing != true) return
         
-        isKaleidoscopeVisible = true
+        isAnalyzerVisible = true
         
         // Dismiss any open bottom sheet (NowPlayingFragment)
         supportFragmentManager.findFragmentByTag("now_playing")?.let { fragment ->
@@ -194,12 +209,14 @@ class MainActivity : AppCompatActivity() {
         // Hide system UI for true fullscreen
         hideSystemUI()
         
-        binding.kaleidoscopeView.visibility = View.VISIBLE
-        binding.kaleidoscopeView.alpha = 0f
-        binding.kaleidoscopeView.animate()
-            .alpha(1f)
-            .setDuration(500)
-            .start()
+        val style = SettingsManager.getAnalyzerStyle(this)
+        val showKaleidoscope = style == SettingsManager.ANALYZER_STYLE_KALEIDOSCOPE
+        binding.kaleidoscopeView.visibility = if (showKaleidoscope) View.VISIBLE else View.GONE
+        binding.spectrumBarsView.visibility = if (showKaleidoscope) View.GONE else View.VISIBLE
+
+        val targetView = if (showKaleidoscope) binding.kaleidoscopeView else binding.spectrumBarsView
+        targetView.alpha = 0f
+        targetView.animate().alpha(1f).setDuration(500).start()
         // Hide main content
         binding.mainContent.animate()
             .alpha(0f)
@@ -210,9 +227,9 @@ class MainActivity : AppCompatActivity() {
             .start()
     }
     
-    fun hideKaleidoscope() {
-        if (!isKaleidoscopeVisible) return
-        isKaleidoscopeVisible = false
+    private fun hideAnalyzer() {
+        if (!isAnalyzerVisible) return
+        isAnalyzerVisible = false
         
         // Restore system UI
         showSystemUI()
@@ -227,9 +244,12 @@ class MainActivity : AppCompatActivity() {
         binding.kaleidoscopeView.animate()
             .alpha(0f)
             .setDuration(500)
-            .withEndAction {
-                binding.kaleidoscopeView.visibility = View.GONE
-            }
+            .withEndAction { binding.kaleidoscopeView.visibility = View.GONE }
+            .start()
+        binding.spectrumBarsView.animate()
+            .alpha(0f)
+            .setDuration(500)
+            .withEndAction { binding.spectrumBarsView.visibility = View.GONE }
             .start()
     }
     
@@ -261,7 +281,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    fun isKaleidoscopeShowing() = isKaleidoscopeVisible
+    fun isKaleidoscopeShowing() = isAnalyzerVisible
     
     fun resetAutoHideTimer() {
         lastInteractionTime = System.currentTimeMillis()
