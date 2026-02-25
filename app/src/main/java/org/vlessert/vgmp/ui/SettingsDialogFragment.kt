@@ -60,6 +60,16 @@ class SettingsDialogFragment : DialogFragment() {
         
         // Favorites only mode
         binding.switchFavoritesOnly.isChecked = SettingsManager.isFavoritesOnlyMode(context)
+
+        // VGM types
+        val enabledGroups = SettingsManager.getEnabledTypeGroups(context)
+        binding.checkTypeVgm.isChecked = enabledGroups.contains(SettingsManager.TYPE_GROUP_VGM)
+        binding.checkTypeGme.isChecked = enabledGroups.contains(SettingsManager.TYPE_GROUP_GME)
+        binding.checkTypeKss.isChecked = enabledGroups.contains(SettingsManager.TYPE_GROUP_KSS)
+        binding.checkTypeTracker.isChecked = enabledGroups.contains(SettingsManager.TYPE_GROUP_TRACKER)
+        binding.checkTypeMidi.isChecked = enabledGroups.contains(SettingsManager.TYPE_GROUP_MIDI)
+        binding.checkTypeMus.isChecked = enabledGroups.contains(SettingsManager.TYPE_GROUP_MUS)
+        binding.checkTypeRsn.isChecked = enabledGroups.contains(SettingsManager.TYPE_GROUP_RSN)
     }
 
     private fun setupListeners() {
@@ -80,6 +90,27 @@ class SettingsDialogFragment : DialogFragment() {
         binding.switchFavoritesOnly.setOnCheckedChangeListener { _, isChecked ->
             SettingsManager.setFavoritesOnlyMode(context, isChecked)
         }
+
+        val updateTypes = {
+            val groups = mutableSetOf<String>()
+            if (binding.checkTypeVgm.isChecked) groups.add(SettingsManager.TYPE_GROUP_VGM)
+            if (binding.checkTypeGme.isChecked) groups.add(SettingsManager.TYPE_GROUP_GME)
+            if (binding.checkTypeKss.isChecked) groups.add(SettingsManager.TYPE_GROUP_KSS)
+            if (binding.checkTypeTracker.isChecked) groups.add(SettingsManager.TYPE_GROUP_TRACKER)
+            if (binding.checkTypeMidi.isChecked) groups.add(SettingsManager.TYPE_GROUP_MIDI)
+            if (binding.checkTypeMus.isChecked) groups.add(SettingsManager.TYPE_GROUP_MUS)
+            if (binding.checkTypeRsn.isChecked) groups.add(SettingsManager.TYPE_GROUP_RSN)
+            SettingsManager.setEnabledTypeGroups(context, groups)
+            (activity as? MainActivity)?.refreshLibrary()
+        }
+
+        binding.checkTypeVgm.setOnCheckedChangeListener { _, _ -> updateTypes() }
+        binding.checkTypeGme.setOnCheckedChangeListener { _, _ -> updateTypes() }
+        binding.checkTypeKss.setOnCheckedChangeListener { _, _ -> updateTypes() }
+        binding.checkTypeTracker.setOnCheckedChangeListener { _, _ -> updateTypes() }
+        binding.checkTypeMidi.setOnCheckedChangeListener { _, _ -> updateTypes() }
+        binding.checkTypeMus.setOnCheckedChangeListener { _, _ -> updateTypes() }
+        binding.checkTypeRsn.setOnCheckedChangeListener { _, _ -> updateTypes() }
         
         binding.seekbarFadeTimeout.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {

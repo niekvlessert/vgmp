@@ -152,6 +152,80 @@
                 android:background="@color/vgmp_divider"
                 android:layout_marginTop="16dp" />
 
+            <!-- VGM Types Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="VGM Types"
+                android:textColor="@color/vgmp_accent"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="8dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Select which types are shown and playable"
+                android:textColor="@color/vgmp_text_secondary"
+                android:textSize="12sp"
+                android:layout_marginBottom="8dp" />
+
+            <CheckBox
+                android:id="@+id/check_type_vgm"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="VGM/VGZ"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <CheckBox
+                android:id="@+id/check_type_gme"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="NSF/GBS/SPC/etc (GME)"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <CheckBox
+                android:id="@+id/check_type_kss"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="KSS/MSX"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <CheckBox
+                android:id="@+id/check_type_tracker"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Tracker (MOD/XM/S3M/IT)"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <CheckBox
+                android:id="@+id/check_type_midi"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="MIDI"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <CheckBox
+                android:id="@+id/check_type_mus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Doom MUS/LMP"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <CheckBox
+                android:id="@+id/check_type_rsn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="RSN (SPC archives)"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="16dp"
+                android:background="@color/vgmp_divider" />
+
             <!-- Playback Section -->
             <TextView
                 android:layout_width="match_parent"

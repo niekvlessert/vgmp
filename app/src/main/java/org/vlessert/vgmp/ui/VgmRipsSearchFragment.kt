@@ -53,8 +53,8 @@ class VgmRipsSearchFragment : DialogFragment() {
         }
         
         // Setup chip spinner
-        val chipAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_item, VgmRipsRepository.SOUND_CHIPS)
-        chipAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val chipAdapter = ArrayAdapter(requireContext(), R.layout.item_chip_spinner, VgmRipsRepository.SOUND_CHIPS)
+        chipAdapter.setDropDownViewResource(R.layout.item_chip_spinner_dropdown)
         binding.chipSpinner.adapter = chipAdapter
         binding.chipSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {

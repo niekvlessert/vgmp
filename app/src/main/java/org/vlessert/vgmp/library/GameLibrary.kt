@@ -9,6 +9,7 @@ import com.github.junrar.rarfile.FileHeader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.vlessert.vgmp.engine.VgmEngine
+import org.vlessert.vgmp.settings.SettingsManager
 import java.io.*
 import java.util.zip.ZipInputStream
 
@@ -70,13 +71,42 @@ object GameLibrary {
 
     private lateinit var db: VgmDatabase
     private lateinit var gamesDir: File
+    private lateinit var appContext: Context
     private var initialized = false
+
+    private val EXTENSION_GROUPS = mapOf(
+        SettingsManager.TYPE_GROUP_VGM to VGM_EXTENSIONS,
+        SettingsManager.TYPE_GROUP_GME to GME_EXTENSIONS,
+        SettingsManager.TYPE_GROUP_KSS to KSS_EXTENSIONS,
+        SettingsManager.TYPE_GROUP_TRACKER to TRACKER_EXTENSIONS,
+        SettingsManager.TYPE_GROUP_MIDI to MIDI_EXTENSIONS,
+        SettingsManager.TYPE_GROUP_MUS to MUS_EXTENSIONS,
+        SettingsManager.TYPE_GROUP_RSN to RSN_EXTENSIONS
+    )
 
     fun init(context: Context) {
         if (initialized) return
         db = VgmDatabase.getInstance(context)
         gamesDir = File(context.filesDir, "games").also { it.mkdirs() }
+        appContext = context.applicationContext
         initialized = true
+    }
+
+    private fun getEnabledExtensions(): Set<String> {
+        val groups = SettingsManager.getEnabledTypeGroups(appContext)
+        val enabled = mutableSetOf<String>()
+        groups.forEach { key ->
+            EXTENSION_GROUPS[key]?.let { enabled.addAll(it) }
+        }
+        return enabled
+    }
+
+    private fun filterTracksByEnabledTypes(tracks: List<TrackEntity>, enabledExts: Set<String>): List<TrackEntity> {
+        if (enabledExts.isEmpty()) return emptyList()
+        return tracks.filter { track ->
+            val path = track.filePath.lowercase()
+            enabledExts.any { ext -> path.endsWith(ext) }
+        }
     }
 
     /**
@@ -720,6 +750,7 @@ object GameLibrary {
     /** Search games by name substring. Returns max 50 results with tracks loaded.
      * If query is empty, returns all games. Favorites are sorted to the top. */
     suspend fun search(query: String): List<Game> = withContext(Dispatchers.IO) {
+        val enabledExts = getEnabledExtensions()
         val gameEntities = if (query.isBlank()) {
             db.gameDao().getAllGames()
         } else {
@@ -727,8 +758,9 @@ object GameLibrary {
         }
         // Sort favorites to top, then by name
         val sorted = gameEntities.sortedWith(compareByDescending<GameEntity> { it.isFavorite }.thenBy { it.name.lowercase() })
-        sorted.take(MAX_SEARCH_RESULTS).map { gameEntity ->
-            val tracks = db.trackDao().getTracksForGame(gameEntity.id)
+        sorted.take(MAX_SEARCH_RESULTS).mapNotNull { gameEntity ->
+            val tracks = filterTracksByEnabledTypes(db.trackDao().getTracksForGame(gameEntity.id), enabledExts)
+            if (tracks.isEmpty()) return@mapNotNull null
             // Keep tracks in original order - don't sort to avoid index mismatch with service
             val artBytes = if (gameEntity.artPath.isNotEmpty()) {
                 try { File(gameEntity.artPath).readBytes() } catch (e: Exception) { null }
@@ -754,13 +786,16 @@ object GameLibrary {
     }
 
     suspend fun getFavoriteTracks(): List<TrackEntity> = withContext(Dispatchers.IO) {
-        db.trackDao().getFavoriteTracks()
+        val enabledExts = getEnabledExtensions()
+        filterTracksByEnabledTypes(db.trackDao().getFavoriteTracks(), enabledExts)
     }
 
     /** Get a specific game with its tracks */
     suspend fun getGame(gameId: Long): Game? = withContext(Dispatchers.IO) {
+        val enabledExts = getEnabledExtensions()
         val gameEntity = db.gameDao().getAllGames().firstOrNull { it.id == gameId } ?: return@withContext null
-        val tracks = db.trackDao().getTracksForGame(gameId)
+        val tracks = filterTracksByEnabledTypes(db.trackDao().getTracksForGame(gameId), enabledExts)
+        if (tracks.isEmpty()) return@withContext null
         val artBytes = if (gameEntity.artPath.isNotEmpty()) {
             try { File(gameEntity.artPath).readBytes() } catch (e: Exception) { null }
         } else null
@@ -769,8 +804,10 @@ object GameLibrary {
 
     /** All games (for Android Auto root browse) */
     suspend fun getAllGames(): List<Game> = withContext(Dispatchers.IO) {
-        db.gameDao().getAllGames().map { gameEntity ->
-            val tracks = db.trackDao().getTracksForGame(gameEntity.id)
+        val enabledExts = getEnabledExtensions()
+        db.gameDao().getAllGames().mapNotNull { gameEntity ->
+            val tracks = filterTracksByEnabledTypes(db.trackDao().getTracksForGame(gameEntity.id), enabledExts)
+            if (tracks.isEmpty()) return@mapNotNull null
             Game(gameEntity, tracks, null)
         }
     }

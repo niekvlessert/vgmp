@@ -214,6 +214,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         mediaSession = MediaSessionCompat(this, "VgmPlayback").apply {
             setSessionActivity(pendingIntent)
             setCallback(sessionCallback)
+            setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
             isActive = true
         }
         sessionToken = mediaSession.sessionToken
@@ -1129,6 +1130,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, currentTags.displayGame.ifEmpty { game.name })
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, currentTags.displaySystem)
             .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, (currentTrackIdx + 1).toLong())
+            .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, game.tracks.size.toLong())
         
         // Set duration to 0 in endless loop mode to hide progress bar, otherwise use actual duration
         val duration = if (endlessLoopMode) 0L else trackDurationMs
