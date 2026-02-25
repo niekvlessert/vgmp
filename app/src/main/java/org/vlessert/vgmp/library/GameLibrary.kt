@@ -1703,6 +1703,7 @@ object GameLibrary {
                                     put("trackIndex", track.trackIndex)
                                     put("durationSamples", track.durationSamples)
                                     put("isFavorite", track.isFavorite)
+                                    put("subTrackIndex", track.subTrackIndex)
                                 }
                                 tracksArray.put(trackJson)
                             }
@@ -1850,7 +1851,8 @@ object GameLibrary {
                                 filePath = trackFile.absolutePath,
                                 trackIndex = trackJson.getInt("trackIndex"),
                                 durationSamples = trackJson.optLong("durationSamples", 0),
-                                isFavorite = trackJson.optBoolean("isFavorite", false)
+                                isFavorite = trackJson.optBoolean("isFavorite", false),
+                                subTrackIndex = trackJson.optInt("subTrackIndex", -1)
                             )
                             trackEntities.add(trackEntity)
                             db.trackDao().insertTrack(trackEntity)

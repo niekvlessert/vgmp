@@ -49,6 +49,13 @@ object VgmEngine {
     @JvmStatic external fun nGetDeviceVolume(id: Int): Int
     @JvmStatic external fun nSetDeviceVolume(id: Int, vol: Int)
 
+    // Per-channel muting (libvgm/libgme)
+    @JvmStatic external fun nGetChannelCount(): Int
+    @JvmStatic external fun nGetChannelDeviceName(index: Int): String
+    @JvmStatic external fun nGetChannelName(index: Int): String
+    @JvmStatic external fun nIsChannelMuted(index: Int): Boolean
+    @JvmStatic external fun nSetChannelMuted(index: Int, muted: Boolean)
+
     // libgme multi-track support (NSF, GBS, etc.)
     @JvmStatic external fun nGetTrackCount(): Int
     @JvmStatic external fun nSetTrack(trackIndex: Int): Boolean
@@ -88,6 +95,12 @@ object VgmEngine {
     suspend fun getDeviceName(id: Int): String = mutex.withLock { nGetDeviceName(id) }
     suspend fun getDeviceVolume(id: Int): Int = mutex.withLock { nGetDeviceVolume(id) }
     suspend fun setDeviceVolume(id: Int, vol: Int) = mutex.withLock { nSetDeviceVolume(id, vol) }
+
+    suspend fun getChannelCount(): Int = mutex.withLock { nGetChannelCount() }
+    suspend fun getChannelDeviceName(index: Int): String = mutex.withLock { nGetChannelDeviceName(index) }
+    suspend fun getChannelName(index: Int): String = mutex.withLock { nGetChannelName(index) }
+    suspend fun isChannelMuted(index: Int): Boolean = mutex.withLock { nIsChannelMuted(index) }
+    suspend fun setChannelMuted(index: Int, muted: Boolean) = mutex.withLock { nSetChannelMuted(index, muted) }
     
     // Multi-track support (NSF, GBS, etc.)
     suspend fun getTrackCount(): Int = mutex.withLock { nGetTrackCount() }

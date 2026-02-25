@@ -355,6 +355,8 @@ class MainActivity : AppCompatActivity() {
                     fragment.refreshView()
                 }
             }
+        // Refresh playback service's game list
+        playbackService?.refreshGames()
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
