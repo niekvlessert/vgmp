@@ -75,6 +75,9 @@ object VgmEngine {
     @JvmStatic external fun nGetKssTrackCountDirect(path: String): Int
     @JvmStatic external fun nGetKssTrackRange(path: String): IntArray  // Returns [minTrack, maxTrack]
 
+    // PSF cache readiness (for async generation)
+    @JvmStatic external fun nIsPsfCacheReady(): Boolean
+
     // ----- Thread-safe wrappers -----
 
     suspend fun setSampleRate(rate: Int) = mutex.withLock { nSetSampleRate(rate) }
@@ -120,6 +123,9 @@ object VgmEngine {
     // KSS direct track info
     suspend fun getKssTrackCountDirect(path: String): Int = mutex.withLock { nGetKssTrackCountDirect(path) }
     suspend fun getKssTrackRange(path: String): IntArray = mutex.withLock { nGetKssTrackRange(path) }
+
+    // PSF cache readiness
+    suspend fun isPsfCacheReady(): Boolean = mutex.withLock { nIsPsfCacheReady() }
 
     /**
      * Parse the raw tag string returned by [nGetTags] into a [VgmTags] object.

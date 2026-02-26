@@ -75,6 +75,55 @@ else()
     message(WARNING "Git not found, skipping patch application. Run prepare_libvgm_source.sh manually.")
 endif()
 
+# Apply patches to libpsf before building
+if(GIT_FOUND)
+    # Check for libpsf patches
+    file(GLOB PSF_PATCH_FILES "${CMAKE_CURRENT_SOURCE_DIR}/patches/libpsf-*.patch")
+    foreach(PATCH_FILE ${PSF_PATCH_FILES})
+        get_filename_component(PATCH_NAME ${PATCH_FILE} NAME)
+        
+        # Check if patch is already applied by trying to apply it in reverse
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} apply --check -R ${PATCH_FILE}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libpsf
+            RESULT_VARIABLE PATCH_ALREADY_APPLIED
+            OUTPUT_QUIET
+            ERROR_QUIET
+        )
+        
+        # If reverse patch fails, patch is not applied yet
+        if(NOT PATCH_ALREADY_APPLIED EQUAL 0)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} apply --check ${PATCH_FILE}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libpsf
+                RESULT_VARIABLE PATCH_CHECK_RESULT
+                OUTPUT_QUIET
+                ERROR_QUIET
+            )
+            
+            if(PATCH_CHECK_RESULT EQUAL 0)
+                message(STATUS "Applying libpsf patch: ${PATCH_NAME}")
+                execute_process(
+                    COMMAND ${GIT_EXECUTABLE} apply ${PATCH_FILE}
+                    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libpsf
+                    RESULT_VARIABLE PATCH_RESULT
+                    OUTPUT_VARIABLE PATCH_OUTPUT
+                    ERROR_VARIABLE PATCH_ERROR
+                )
+                if(PATCH_RESULT EQUAL 0)
+                    message(STATUS "  Applied successfully")
+                else()
+                    message(WARNING "  Failed to apply patch: ${PATCH_ERROR}")
+                endif()
+            else()
+                message(STATUS "  Patch ${PATCH_NAME} already applied or incompatible (skipping)")
+            endif()
+        else()
+            message(STATUS "  Patch ${PATCH_NAME} already applied (skipping)")
+        endif()
+    endforeach()
+endif()
+
 # Include libvgm's own CMake configuration
 set(UTIL_CHARSET_CONV OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libvgm vgm_build)
@@ -106,6 +155,9 @@ set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libMusDoom musdoom_build)
 
+# Include libpsf for PSF/PSF1 files (PlayStation music)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libpsf psf_build)
+
 # JNI glue shared library
 add_library(vgmplayer SHARED vgmplayer_jni.cpp)
 
@@ -119,6 +171,8 @@ target_include_directories(vgmplayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/libkss/modules
     ${CMAKE_CURRENT_SOURCE_DIR}/libADLMIDI/include
     ${CMAKE_CURRENT_SOURCE_DIR}/libMusDoom/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/libpsf
+    ${CMAKE_CURRENT_SOURCE_DIR}/libpsf/spu
 )
 
 target_link_libraries(vgmplayer
@@ -130,6 +184,7 @@ target_link_libraries(vgmplayer
     kss
     ADLMIDI_static
     musdoom
+    psf
     log
     android
     z

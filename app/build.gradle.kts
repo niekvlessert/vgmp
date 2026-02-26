@@ -8,6 +8,31 @@ android {
     namespace = "org.vlessert.vgmp"
     compileSdk = 35
 
+    val keystorePropertiesFile = file("keystore.properties")
+    val keystoreMap = if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.readLines()
+            .filter { it.contains("=") }
+            .associate {
+                val (key, value) = it.split("=", limit = 2)
+                key.trim() to value.trim()
+            }
+    } else {
+        emptyMap()
+    }
+
+    signingConfigs {
+        create("release") {
+            if (keystoreMap.isNotEmpty()) {
+                storeFile = file(keystoreMap["storeFile"] ?: "vgmp.keystore")
+                storePassword = keystoreMap["storePassword"] ?: ""
+                keyAlias = keystoreMap["keyAlias"] ?: "vgmp"
+                keyPassword = keystoreMap["keyPassword"] ?: ""
+            } else {
+                throw GradleException("keystore.properties not found. Create it with your signing credentials.")
+            }
+        }
+    }
+
     configurations.all {
         resolutionStrategy {
             force("org.jetbrains.kotlin:kotlin-stdlib:2.0.0")
@@ -54,6 +79,7 @@ android {
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

@@ -29,8 +29,9 @@ private val MIDI_EXTENSIONS = listOf(".mid", ".midi", ".rmi", ".smf")
 // MUS files are Doom music files handled by libMusDoom (OPL2/OPL3 FM synthesis)
 private val MUS_EXTENSIONS = listOf(".mus", ".lmp")
 // RSN files are RAR archives containing SPC files
-private val RSN_EXTENSIONS = listOf(".rsn")
-private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS + MIDI_EXTENSIONS + MUS_EXTENSIONS + RSN_EXTENSIONS
+    private val RAR_ARCHIVE_EXTENSIONS = listOf(".rsn", ".rar")
+    private val PSF_EXTENSIONS = listOf(".psf", ".psf1", ".psf2", ".minipsf", ".minipsf1", ".minipsf2")
+    private val ALL_AUDIO_EXTENSIONS = VGM_EXTENSIONS + GME_EXTENSIONS + KSS_EXTENSIONS + TRACKER_EXTENSIONS + MIDI_EXTENSIONS + MUS_EXTENSIONS + RAR_ARCHIVE_EXTENSIONS + PSF_EXTENSIONS
 private const val TRACKER_GAME_NAME = "Tracker files"
 private const val MIDI_GAME_NAME = "MIDI files"
 private const val DOOM1_GAME_NAME = "Doom"
@@ -85,7 +86,8 @@ object GameLibrary {
         SettingsManager.TYPE_GROUP_TRACKER to TRACKER_EXTENSIONS,
         SettingsManager.TYPE_GROUP_MIDI to MIDI_EXTENSIONS,
         SettingsManager.TYPE_GROUP_MUS to MUS_EXTENSIONS,
-        SettingsManager.TYPE_GROUP_RSN to RSN_EXTENSIONS
+        SettingsManager.TYPE_GROUP_RSN to RAR_ARCHIVE_EXTENSIONS,
+        SettingsManager.TYPE_GROUP_PSF to PSF_EXTENSIONS
     )
 
     fun init(context: Context) {
@@ -152,6 +154,11 @@ object GameLibrary {
                     if (fileName.endsWith(".zip", ignoreCase = true)) {
                         context.assets.open(assetPath).use { stream ->
                             importZip(stream, fileName)
+                        }
+                    } else if (fileName.endsWith(".rsn", ignoreCase = true) || fileName.endsWith(".rar", ignoreCase = true)) {
+                        // RAR archives containing SPC/PSF files
+                        context.assets.open(assetPath).use { stream ->
+                            importRsn(stream, fileName)
                         }
                     } else {
                         // Copy asset to a temp file then import as single file
@@ -226,12 +233,12 @@ object GameLibrary {
                             artFiles[baseName] = outFile
                             artFile = outFile  // Also set for non-vigamup format
                         }
-                        // RSN files are RAR archives containing SPC files - extract them
-                        name.endsWith(".rsn", true) -> {
+                        // RSN/RAR files are RAR archives containing SPC or PSF files - extract them
+                        name.endsWith(".rsn", true) || name.endsWith(".rar", true) -> {
                             try {
                                 extractRsnFile(outFile, gameFolder, vgmFiles)
                             } catch (e: Exception) {
-                                Log.e(TAG, "Failed to extract RSN file: ${outFile.name}", e)
+                                Log.e(TAG, "Failed to extract RAR archive: ${outFile.name}", e)
                             }
                         }
                         ALL_AUDIO_EXTENSIONS.any { ext -> name.endsWith(ext, true) } ->
@@ -1442,8 +1449,14 @@ object GameLibrary {
                 if (!header.isDirectory) {
                     val name = header.fileName.substringAfterLast('/')
                     
-                    // Only extract SPC files
-                    if (name.endsWith(".spc", ignoreCase = true)) {
+                    // Extract SPC files (for RSN) and PSF files (for PSF archives)
+                    if (name.endsWith(".spc", ignoreCase = true) || 
+                        name.endsWith(".psf", ignoreCase = true) ||
+                        name.endsWith(".psf1", ignoreCase = true) ||
+                        name.endsWith(".psf2", ignoreCase = true) ||
+                        name.endsWith(".minipsf", ignoreCase = true) ||
+                        name.endsWith(".minipsf1", ignoreCase = true) ||
+                        name.endsWith(".minipsf2", ignoreCase = true)) {
                         val outFile = File(gameFolder, sanitizeFilename(name))
                         outFile.outputStream().use { out ->
                             archive.extractFile(header, out)
@@ -1456,7 +1469,7 @@ object GameLibrary {
             
             archive.close()
             
-            // Delete the RSN file after extraction to save space
+            // Delete the RSN/RAR file after extraction to save space
             rsnFile.delete()
             
         } catch (e: Exception) {
@@ -1497,7 +1510,7 @@ object GameLibrary {
         var gameName = folderName
         var authorName = ""
         var yearStr = ""
-        var systemName = "Super Nintendo"
+        var systemName = "" // Will be detected from file type
         
         try {
             // Use the simpler Junrar.extract method
@@ -1508,7 +1521,13 @@ object GameLibrary {
                 val name = file.name.lowercase()
                 
                 when {
-                    name.endsWith(".spc") -> {
+                    name.endsWith(".spc") || 
+                    name.endsWith(".psf") ||
+                    name.endsWith(".psf1") ||
+                    name.endsWith(".psf2") ||
+                    name.endsWith(".minipsf") ||
+                    name.endsWith(".minipsf1") ||
+                    name.endsWith(".minipsf2") -> {
                         vgmFiles.add(file)
                     }
                     name == "info.txt" -> {
@@ -1542,11 +1561,17 @@ object GameLibrary {
         tempRsnFile.delete()
         
         if (vgmFiles.isEmpty()) {
-            Log.w(TAG, "No SPC files found in RSN: $rsnName")
+            Log.w(TAG, "No audio files found in RSN/RAR: $rsnName")
             return null
         }
         
-        // Sort SPC files by name
+        // Auto-detect system based on file extensions
+        val hasPsfFiles = vgmFiles.any { it.extension.lowercase() in listOf("psf", "psf1", "psf2", "minipsf", "minipsf1", "minipsf2") }
+        if (systemName.isEmpty()) {
+            systemName = if (hasPsfFiles) "PlayStation" else "Super Nintendo"
+        }
+        
+        // Sort files by name
         val sortedVgm = vgmFiles.sortedBy { it.name }
         
         // Get tags from first track (may override info.txt values)

@@ -22,6 +22,7 @@ object SettingsManager {
     const val TYPE_GROUP_MIDI = "midi"
     const val TYPE_GROUP_MUS = "mus"
     const val TYPE_GROUP_RSN = "rsn"
+    const val TYPE_GROUP_PSF = "psf"
 
     val DEFAULT_TYPE_GROUPS = setOf(
         TYPE_GROUP_VGM,
@@ -30,7 +31,8 @@ object SettingsManager {
         TYPE_GROUP_TRACKER,
         TYPE_GROUP_MIDI,
         TYPE_GROUP_MUS,
-        TYPE_GROUP_RSN
+        TYPE_GROUP_RSN,
+        TYPE_GROUP_PSF
     )
     
     private fun getPrefs(context: Context): SharedPreferences {

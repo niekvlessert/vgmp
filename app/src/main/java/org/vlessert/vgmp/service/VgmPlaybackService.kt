@@ -39,6 +39,7 @@ import org.vlessert.vgmp.library.GameLibrary
 import org.vlessert.vgmp.library.TrackEntity
 import org.vlessert.vgmp.settings.SettingsManager
 import java.io.File
+import android.widget.Toast
 
 class VgmPlaybackService : MediaBrowserServiceCompat() {
 
@@ -408,6 +409,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         if (!opened) {
             Log.e(TAG, "Failed to open ${track.filePath}")
             return
+        }
+        
+        // Show toast for PSF files since they require background generation
+        val lowerPath = track.filePath.lowercase()
+        if (lowerPath.endsWith(".psf") || lowerPath.endsWith(".psf1")) {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(applicationContext, "Generating audio, please wait...", Toast.LENGTH_LONG).show()
+            }
         }
         
         // For multi-track files (NSF, GBS, etc.), switch to the correct sub-track

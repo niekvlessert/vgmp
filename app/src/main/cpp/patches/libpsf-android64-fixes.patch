@@ -1,0 +1,46 @@
+diff --git a/PsxMem.c b/PsxMem.c
+index 4bcad25..47a7c67 100644
+--- a/PsxMem.c
++++ b/PsxMem.c
+@@ -72,11 +72,11 @@ int psxMemInit() {
+ 	memcpy(psxMemLUT + 0x8000, psxMemLUT, 0x80 * sizeof *psxMemLUT);
+ 	memcpy(psxMemLUT + 0xa000, psxMemLUT, 0x80 * sizeof *psxMemLUT);
+ 
+-	for (i=0; i<0x01; i++) psxMemLUT[i + 0x1f00] = (u32)&psxP[i << 16];
++	for (i=0; i<0x01; i++) psxMemLUT[i + 0x1f00] = &psxP[i << 16];
+ 
+-	for (i=0; i<0x01; i++) psxMemLUT[i + 0x1f80] = (u32)&psxH[i << 16];
++	for (i=0; i<0x01; i++) psxMemLUT[i + 0x1f80] = &psxH[i << 16];
+ 
+-	for (i=0; i<0x08; i++) psxMemLUT[i + 0xbfc0] = (u32)&psxR[i << 16];
++	for (i=0; i<0x08; i++) psxMemLUT[i + 0xbfc0] = &psxR[i << 16];
+ 
+ 	return 0;
+ }
+diff --git a/driver.h b/driver.h
+index 393491d..085ab41 100644
+--- a/driver.h
++++ b/driver.h
+@@ -1,5 +1,12 @@
++#ifndef DRIVER_H
++#define DRIVER_H
++
+ #include "types.h"
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ typedef struct __PSFTAG
+ {
+  char *key;
+@@ -24,3 +31,9 @@ PSFINFO *sexy_getpsfinfo(char *path);
+ void sexy_freepsfinfo(PSFINFO *info);
+ 
+ void sexyd_update(unsigned char*,long);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif

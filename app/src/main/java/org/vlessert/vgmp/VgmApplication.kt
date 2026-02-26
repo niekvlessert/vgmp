@@ -16,12 +16,13 @@ class VgmApplication : Application() {
         // Load all bundled files sequentially to avoid race conditions with VgmEngine
         // The VgmEngine has shared state, so parallel loading can cause tag corruption
         applicationScope.launch {
-            // Load bundled audio files on first run (NSF, SPC, etc.)
+            // Load bundled audio files on first run (NSF, SPC, PSF, etc.)
             GameLibrary.loadBundledAudioFilesIfNeeded(this@VgmApplication, listOf(
                 "Shovel_Knight_Music.nsf",
                 "Plok.zip",
                 "Doom 1.zip",
-                "Doom 2.zip"
+                "Doom 2.zip",
+                "FF7_psf.rar"
             ))
             
             // Load bundled tracker files on first run (MOD, XM, S3M, IT, etc.)

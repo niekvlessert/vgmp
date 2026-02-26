@@ -13,3 +13,6 @@
 [submodule "app/src/main/cpp/libADLMIDI"]
 	path = app/src/main/cpp/libADLMIDI
 	url = https://github.com/Wohlstand/libADLMIDI.git
+[submodule "app/src/main/cpp/libpsf"]
+	path = app/src/main/cpp/libpsf
+	url = https://github.com/CoreDumpling/sexypsf.git

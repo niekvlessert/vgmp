@@ -42,12 +42,13 @@
 #include "libmusdoom.h"
 #include "mus2mid.h"
 #include "memio.h"
+#include "libpsf/driver.h"
 
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "VgmJNI", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VgmJNI", __VA_ARGS__)
 
 // Player type enumeration
-enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT, LIBKSS, LIBADLMIDI, LIBMUSDOOM };
+enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT, LIBKSS, LIBADLMIDI, LIBMUSDOOM, LIBPSF };
 
 static PlayerType gPlayerType = PlayerType::NONE;
 static VGMPlayer *gVgmPlayer = nullptr;
@@ -57,6 +58,7 @@ static KSS *gKss = nullptr;
 static KSSPLAY *gKssPlay = nullptr;
 static ADL_MIDIPlayer *gAdlPlayer = nullptr;
 static musdoom_emulator_t *gMusDoomPlayer = nullptr;
+static PSFINFO *gPsfInfo = nullptr;
 static std::vector<uint8_t> gMusDoomData;  // MUS data must remain valid during playback
 static std::vector<uint8_t> gMusDoomMidiData;  // Converted MIDI data for MUS playback
 static DATA_LOADER *gLoader = nullptr;
@@ -64,6 +66,18 @@ static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
 static UINT32 gSampleRate = 44100;
 static std::string gRomPath = "";
+
+// PSF playback state - asynchronous generation and streaming
+#include <atomic>
+#include <thread>
+#include <memory>
+static std::mutex gPsfStateMutex;
+static std::shared_ptr<std::vector<uint8_t>> gPsfAudioCachePtr;  // cached audio after generation
+static size_t gPsfPlaybackPos = 0;            // current playback position in bytes
+static std::atomic<bool> gPsfCacheReady{false};
+static std::atomic<int> gPsfCurrentGeneration{0};
+static std::atomic<bool> gPsfGenerationComplete{false};
+static std::thread gPsfGenerationThread;    // thread handle for PSF generation
 
 // Current track index for libgme (NSF can have multiple tracks)
 static int gGmeTrackIndex = 0;
@@ -109,6 +123,20 @@ static void fft_process(std::vector<Complex> &a) {
   }
 }
 
+// PSF callback: receives generated audio samples
+// Declared in libpsf/driver.h with extern "C"
+void sexyd_update(unsigned char* pSound, long lBytes) {
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    if (gPsfAudioCachePtr) {
+        gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), pSound, pSound + lBytes);
+        // Mark cache ready when we have at least 4 seconds of audio (44100 frames/sec * 4 bytes/frame * 4)
+        if (!gPsfCacheReady.load() && gPsfAudioCachePtr->size() >= 44100 * 4 * 4) {
+            gPsfCacheReady = true;
+            LOGD("PSF cache ready with %zu bytes", gPsfAudioCachePtr->size());
+        }
+    }
+}
+
 static DATA_LOADER *RequestFileCallback(void *userParam, PlayerBase *player,
                                         const char *fileName) {
   DATA_LOADER *dLoad = FileLoader_Init(fileName);
@@ -131,6 +159,21 @@ static DATA_LOADER *RequestFileCallback(void *userParam, PlayerBase *player,
   }
 
   return nullptr;
+}
+
+// Check if file extension is PSF/PSF1 format
+static bool isPsfFormat(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext) return false;
+  ext++; // skip the dot
+  
+  // Convert to lowercase for comparison
+  char lowerExt[8] = {0};
+  for (int i = 0; ext[i] && i < 7; i++) {
+    lowerExt[i] = tolower(ext[i]);
+  }
+  
+  return (strcmp(lowerExt, "psf") == 0 || strcmp(lowerExt, "minipsf") == 0);
 }
 
 // Check if file extension is supported by libgme
@@ -297,6 +340,26 @@ static void cleanup() {
     gAdlPlayer = nullptr;
   }
   
+  // Cleanup libpsf
+  if (gPsfInfo) {
+    sexy_freepsfinfo(gPsfInfo);
+    gPsfInfo = nullptr;
+  }
+  // Stop and join PSF generation thread if running
+  if (gPsfGenerationThread.joinable()) {
+    sexy_stop(); // signal generation to abort
+    gPsfGenerationThread.join();
+  }
+  // Invalidate PSF generation and clear cache
+  {
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    gPsfCurrentGeneration++; // invalidate any pending generation
+    gPsfAudioCachePtr.reset();
+    gPsfPlaybackPos = 0;
+    gPsfCacheReady = false;
+    gPsfGenerationComplete = false;
+  }
+  
   // Cleanup libMusDoom
   if (gMusDoomPlayer) {
     musdoom_stop(gMusDoomPlayer);
@@ -411,6 +474,46 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     }
     
     LOGD("nOpen: libgme success, %d tracks, sampleRate=%u", gGmeTrackCount, gSampleRate);
+    return JNI_TRUE;
+  }
+
+  // Check if this is a PSF/PSF1 format for libpsf
+  if (isPsfFormat(path)) {
+    LOGD("Detected PSF format: %s", path);
+    
+    gPsfInfo = sexy_load(const_cast<char*>(path));
+    env->ReleaseStringUTFChars(jpath, path);
+    
+    if (!gPsfInfo) {
+      LOGE("sexy_load failed");
+      return JNI_FALSE;
+    }
+    
+    // Start asynchronous generation in background thread to avoid blocking UI
+    int gen = ++gPsfCurrentGeneration;
+    {
+        std::lock_guard<std::mutex> lock(gPsfStateMutex);
+        gPsfAudioCachePtr = std::make_shared<std::vector<uint8_t>>();
+        gPsfPlaybackPos = 0;
+        gPsfCacheReady = false;
+        gPsfGenerationComplete = false;
+    }
+    
+    std::thread t([gen]() {
+        // Run emulation - this blocks until the track finishes
+        sexy_execute();
+        // Under lock, mark generation complete if still current
+        {
+            std::lock_guard<std::mutex> lock(gPsfStateMutex);
+            if (gPsfCurrentGeneration == gen) {
+                gPsfGenerationComplete = true;
+                LOGD("PSF generation complete, total %zu bytes", gPsfAudioCachePtr ? gPsfAudioCachePtr->size() : 0);
+            }
+        }
+    });
+    gPsfGenerationThread = std::move(t);
+    
+    gPlayerType = PlayerType::LIBPSF;
     return JNI_TRUE;
   }
 
@@ -701,6 +804,10 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nPlay(JNIEnv *env, jclass cls) {
     gVgmPlayer->SetSampleRate(gSampleRate);
     gVgmPlayer->Start();
   }
+  if (gPlayerType == PlayerType::LIBPSF) {
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    gPsfPlaybackPos = 0;
+  }
   if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     musdoom_resume(gMusDoomPlayer);
   }
@@ -749,12 +856,25 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
     }
     return JNI_FALSE;
   }
+  if (gPlayerType == PlayerType::LIBPSF) {
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    if (!gPsfCacheReady) return JNI_FALSE; // still generating initial buffer
+    if (!gPsfGenerationComplete) return JNI_FALSE; // generating but buffer ready, not ended yet
+    size_t cacheSize = gPsfAudioCachePtr ? gPsfAudioCachePtr->size() : 0;
+    return (gPsfPlaybackPos >= cacheSize) ? JNI_TRUE : JNI_FALSE;
+  }
   if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     // libMusDoom: check if music is still playing
     // MUS files loop by default when started with looping=1
     return musdoom_is_playing(gMusDoomPlayer) ? JNI_FALSE : JNI_TRUE;
   }
   return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nIsPsfCacheReady(JNIEnv *env, jclass cls) {
+  if (gPlayerType != PlayerType::LIBPSF) return JNI_TRUE;
+  return gPsfCacheReady.load() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetEndlessLoop(
@@ -874,6 +994,10 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
     // Return a reasonable default (2 minutes) if duration unknown
     return (jlong)120 * gSampleRate;
   }
+  if (gPlayerType == PlayerType::LIBPSF && gPsfInfo) {
+    // PSF files have length in milliseconds, convert to samples
+    return (jlong)gPsfInfo->length * gSampleRate / 1000;
+  }
   return 0;
 }
 
@@ -906,6 +1030,11 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
     uint32_t positionMs = musdoom_get_position_ms(gMusDoomPlayer);
     return (jlong)positionMs * gSampleRate / 1000;
   }
+  if (gPlayerType == PlayerType::LIBPSF) {
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    // gPsfPlaybackPos is in bytes; each frame is 4 bytes (stereo 16-bit)
+    return (jlong)(gPsfPlaybackPos / 4);
+  }
   return 0;
 }
 
@@ -925,6 +1054,17 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
   if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
     double seconds = (double)samplePos / gSampleRate;
     adl_positionSeek(gAdlPlayer, seconds);
+  }
+  if (gPlayerType == PlayerType::LIBPSF) {
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    // Convert sample position to bytes (4 bytes per stereo frame)
+    size_t targetBytes = (size_t)samplePos * 4;
+    if (gPsfAudioCachePtr) {
+      // Clamp to available data (cannot seek beyond generated buffer)
+      size_t maxBytes = gPsfAudioCachePtr->size();
+      if (targetBytes > maxBytes) targetBytes = maxBytes;
+      gPsfPlaybackPos = targetBytes;
+    }
   }
   // KSS doesn't have a direct seek function - need to reset and fast-forward
   if (gPlayerType == PlayerType::LIBKSS && gKssPlay && gKss) {
@@ -1056,6 +1196,34 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
         float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
         gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
         gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      }
+    }
+  } else if (gPlayerType == PlayerType::LIBPSF) {
+    // Stream from pre-generated cache - hold lock during entire read to prevent
+    // the generation thread from reallocating the vector while we're reading
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    if (!gPsfAudioCachePtr || gPsfAudioCachePtr->empty() || 
+        (gPsfAudioCachePtr->size() - gPsfPlaybackPos) < 4) {
+      written = 0;
+    } else {
+      size_t bytesRemaining = gPsfAudioCachePtr->size() - gPsfPlaybackPos;
+      size_t framesAvailable = bytesRemaining / 4;
+      jint framesToCopy = (framesAvailable >= (size_t)frames) ? frames : (jint)framesAvailable;
+      if (framesToCopy > 0) {
+        const uint8_t* src = gPsfAudioCachePtr->data() + gPsfPlaybackPos;
+        for (jint i = 0; i < framesToCopy; i++) {
+          int16_t l = *reinterpret_cast<const int16_t*>(src + i * 4);
+          int16_t r = *reinterpret_cast<const int16_t*>(src + i * 4 + 2);
+          dst[i * 2] = l;
+          dst[i * 2 + 1] = r;
+          
+          // Feed to FFT ring buffer (mono mix)
+          float sample = (float)l / 32768.0f + (float)r / 32768.0f;
+          gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+          gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+        }
+        gPsfPlaybackPos += framesToCopy * 4;
+        written = framesToCopy;
       }
     }
   } else if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
@@ -1618,6 +1786,19 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
     }
     return (jlong)180 * gSampleRate; // Default 3 minutes
   }
+
+   // Check if this is a PSF format
+   if (isPsfFormat(path)) {
+     PSFINFO* info = sexy_load(const_cast<char*>(path));
+     env->ReleaseStringUTFChars(jpath, path);
+     if (info) {
+       // PSFINFO.length is in milliseconds, convert to samples
+       jlong length = (jlong)info->length * gSampleRate / 1000;
+       sexy_freepsfinfo(info);
+       return length;
+     }
+     return 0;
+   }
 
   // Use libvgm for VGM/VGZ - VGM files have accurate length from GD3 tags
   DATA_LOADER *locLoader = FileLoader_Init(path);
