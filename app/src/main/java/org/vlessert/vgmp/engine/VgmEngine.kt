@@ -78,6 +78,14 @@ object VgmEngine {
     // PSF cache readiness (for async generation)
     @JvmStatic external fun nIsPsfCacheReady(): Boolean
 
+    // Bass boost control
+    @JvmStatic external fun nSetBassEnabled(enabled: Boolean)
+    @JvmStatic external fun nGetBassEnabled(): Boolean
+
+    // Reverb control
+    @JvmStatic external fun nSetReverbEnabled(enabled: Boolean)
+    @JvmStatic external fun nGetReverbEnabled(): Boolean
+
     // ----- Thread-safe wrappers -----
 
     suspend fun setSampleRate(rate: Int) = mutex.withLock { nSetSampleRate(rate) }
@@ -126,6 +134,14 @@ object VgmEngine {
 
     // PSF cache readiness
     suspend fun isPsfCacheReady(): Boolean = mutex.withLock { nIsPsfCacheReady() }
+
+    // Bass boost control
+    suspend fun setBassEnabled(enabled: Boolean) = mutex.withLock { nSetBassEnabled(enabled) }
+    suspend fun getBassEnabled(): Boolean = mutex.withLock { nGetBassEnabled() }
+
+    // Reverb control
+    suspend fun setReverbEnabled(enabled: Boolean) = mutex.withLock { nSetReverbEnabled(enabled) }
+    suspend fun getReverbEnabled(): Boolean = mutex.withLock { nGetReverbEnabled() }
 
     /**
      * Parse the raw tag string returned by [nGetTags] into a [VgmTags] object.

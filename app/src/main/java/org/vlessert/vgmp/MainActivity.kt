@@ -17,6 +17,7 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.graphics.Color
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import android.Manifest
@@ -29,6 +30,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.vlessert.vgmp.databinding.ActivityMainBinding
+import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.service.VgmPlaybackService
 import org.vlessert.vgmp.ui.LibraryFragment
 import org.vlessert.vgmp.ui.NowPlayingFragment
@@ -364,6 +366,31 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        super.onPrepareOptionsMenu(menu)
+        // Update the checked state of bass and reverb menu items
+        lifecycleScope.launch {
+            try {
+                val bassItem = menu.findItem(R.id.action_bass)
+                val reverbItem = menu.findItem(R.id.action_reverb)
+                val isBassEnabled = VgmEngine.getBassEnabled()
+                val isReverbEnabled = VgmEngine.getReverbEnabled()
+                
+                if (bassItem != null) {
+                    bassItem.isChecked = isBassEnabled
+                    bassItem.icon?.setTint(if (isBassEnabled) Color.GREEN else Color.WHITE)
+                }
+                if (reverbItem != null) {
+                    reverbItem.isChecked = isReverbEnabled
+                    reverbItem.icon?.setTint(if (isReverbEnabled) Color.GREEN else Color.WHITE)
+                }
+            } catch (e: Exception) {
+                // Engine not initialized yet, ignore
+            }
+        }
+        return true
+    }
+
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_download -> {
@@ -374,6 +401,28 @@ class MainActivity : AppCompatActivity() {
             R.id.action_settings -> {
                 org.vlessert.vgmp.ui.SettingsDialogFragment.newInstance()
                     .show(supportFragmentManager, "settings")
+                true
+            }
+            R.id.action_bass -> {
+                // Toggle bass
+                lifecycleScope.launch {
+                    val currentBass = VgmEngine.getBassEnabled()
+                    VgmEngine.setBassEnabled(!currentBass)
+                    val newBass = !currentBass
+                    item.isChecked = newBass
+                    item.icon?.setTint(if (newBass) Color.GREEN else Color.WHITE)
+                }
+                true
+            }
+            R.id.action_reverb -> {
+                // Toggle reverb
+                lifecycleScope.launch {
+                    val currentReverb = VgmEngine.getReverbEnabled()
+                    VgmEngine.setReverbEnabled(!currentReverb)
+                    val newReverb = !currentReverb
+                    item.isChecked = newReverb
+                    item.icon?.setTint(if (newReverb) Color.GREEN else Color.WHITE)
+                }
                 true
             }
             else -> super.onOptionsItemSelected(item)

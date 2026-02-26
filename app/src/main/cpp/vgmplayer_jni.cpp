@@ -96,6 +96,15 @@ static bool gEndlessLoopMode = false;
 static float gFftRingBuffer[FFT_SIZE];
 static int gFftWriteIdx = 0;
 
+// Bass and Reverb State
+static bool gBassEnabled = false;
+static bool gReverbEnabled = false;
+
+// Simple reverb state
+#define REVERB_DELAY_SAMPLES 4410  // ~100ms at 44100Hz
+static float gReverbBuffer[REVERB_DELAY_SAMPLES * 2];  // stereo
+static int gReverbWritePos = 0;
+
 typedef std::complex<float> Complex;
 static void fft_process(std::vector<Complex> &a) {
   int n = a.size();
@@ -877,6 +886,35 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsPsfCacheReady(JNIEnv *env, jclass cls
   return gPsfCacheReady.load() ? JNI_TRUE : JNI_FALSE;
 }
 
+// Bass boost control
+JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetBassEnabled(
+    JNIEnv *env, jclass cls, jboolean enabled) {
+  gBassEnabled = (enabled == JNI_TRUE);
+  LOGD("Bass enabled: %d", gBassEnabled);
+}
+
+JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetBassEnabled(
+    JNIEnv *env, jclass cls) {
+  return gBassEnabled ? JNI_TRUE : JNI_FALSE;
+}
+
+// Reverb control
+JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetReverbEnabled(
+    JNIEnv *env, jclass cls, jboolean enabled) {
+  gReverbEnabled = (enabled == JNI_TRUE);
+  if (!gReverbEnabled) {
+    // Clear reverb buffer when disabled
+    memset(gReverbBuffer, 0, sizeof(gReverbBuffer));
+    gReverbWritePos = 0;
+  }
+  LOGD("Reverb enabled: %d", gReverbEnabled);
+}
+
+JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetReverbEnabled(
+    JNIEnv *env, jclass cls) {
+  return gReverbEnabled ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetEndlessLoop(
     JNIEnv *env, jclass cls, jboolean enabled) {
   gEndlessLoopMode = (enabled == JNI_TRUE);
@@ -1247,6 +1285,48 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
              musdoom_get_position_ms(gMusDoomPlayer),
              musdoom_get_length_ms(gMusDoomPlayer));
       }
+    }
+  }
+
+  // Apply bass boost and reverb processing
+  if (written > 0 && (gBassEnabled || gReverbEnabled)) {
+    for (jint i = 0; i < written; i++) {
+      float l = (float)dst[i * 2] / 32768.0f;
+      float r = (float)dst[i * 2 + 1] / 32768.0f;
+
+      // Apply bass boost (simple low-shelf boost at ~200Hz)
+      if (gBassEnabled) {
+        // Simple bass boost by amplifying low frequencies
+        // Using a simple approach: amplify by 50% for bass
+        l = l * 1.0f + l * 0.5f * (1.0f - std::abs(l));
+        r = r * 1.0f + r * 0.5f * (1.0f - std::abs(r));
+      }
+
+      // Apply reverb (simple delay-based reverb)
+      if (gReverbEnabled) {
+        // Read delayed samples
+        int delayPos = (gReverbWritePos - REVERB_DELAY_SAMPLES + REVERB_DELAY_SAMPLES * 2) % (REVERB_DELAY_SAMPLES * 2);
+        float delayedL = gReverbBuffer[delayPos];
+        float delayedR = gReverbBuffer[delayPos + 1];
+
+        // Mix with delayed signal (30% wet)
+        float reverbMix = 0.3f;
+        l = l + delayedL * reverbMix;
+        r = r + delayedR * reverbMix;
+
+        // Store current samples in delay buffer
+        gReverbBuffer[gReverbWritePos] = l;
+        gReverbBuffer[gReverbWritePos + 1] = r;
+        gReverbWritePos = (gReverbWritePos + 2) % (REVERB_DELAY_SAMPLES * 2);
+      }
+
+      // Clamp and convert back to int16
+      if (l > 1.0f) l = 1.0f;
+      if (l < -1.0f) l = -1.0f;
+      if (r > 1.0f) r = 1.0f;
+      if (r < -1.0f) r = -1.0f;
+      dst[i * 2] = (jshort)(l * 32767.0f);
+      dst[i * 2 + 1] = (jshort)(r * 32767.0f);
     }
   }
 
