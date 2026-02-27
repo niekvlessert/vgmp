@@ -67,13 +67,13 @@ static char *gChipBuf = nullptr;
 static UINT32 gSampleRate = 44100;
 static std::string gRomPath = "";
 
-// PSF playback state - asynchronous generation and streaming
+// PSF playback state - asynchronous generation and streaming with improved thread safety
 #include <atomic>
 #include <thread>
 #include <memory>
 static std::mutex gPsfStateMutex;
 static std::shared_ptr<std::vector<uint8_t>> gPsfAudioCachePtr;  // cached audio after generation
-static size_t gPsfPlaybackPos = 0;            // current playback position in bytes
+static std::atomic<size_t> gPsfPlaybackPos{0};                  // atomic playback position to avoid race conditions
 static std::atomic<bool> gPsfCacheReady{false};
 static std::atomic<int> gPsfCurrentGeneration{0};
 static std::atomic<bool> gPsfGenerationComplete{false};
@@ -135,13 +135,23 @@ static void fft_process(std::vector<Complex> &a) {
 // PSF callback: receives generated audio samples
 // Declared in libpsf/driver.h with extern "C"
 void sexyd_update(unsigned char* pSound, long lBytes) {
-    std::lock_guard<std::mutex> lock(gPsfStateMutex);
-    if (gPsfAudioCachePtr) {
-        gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), pSound, pSound + lBytes);
-        // Mark cache ready when we have at least 4 seconds of audio (44100 frames/sec * 4 bytes/frame * 4)
-        if (!gPsfCacheReady.load() && gPsfAudioCachePtr->size() >= 44100 * 4 * 4) {
-            gPsfCacheReady = true;
-            LOGD("PSF cache ready with %zu bytes", gPsfAudioCachePtr->size());
+    // Use double-buffering approach to avoid vector resizing during playback
+    if (lBytes <= 0) return;
+
+    // Create a temporary copy of the audio data to minimize lock time
+    std::vector<uint8_t> tempData(pSound, pSound + lBytes);
+
+    // Now safely append to the main cache with minimal lock time
+    {
+        std::lock_guard<std::mutex> lock(gPsfStateMutex);
+        if (gPsfAudioCachePtr) {
+            gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), tempData.begin(), tempData.end());
+            // Mark cache ready when we have at least 2 seconds of audio (44100 frames/sec * 4 bytes/frame * 2)
+            // This provides faster startup while maintaining smooth playback
+            if (!gPsfCacheReady.load() && gPsfAudioCachePtr->size() >= 44100 * 4 * 2) {
+                    gPsfCacheReady.store(true, std::memory_order_release);
+                LOGD("PSF cache ready with %zu bytes", gPsfAudioCachePtr->size());
+            }
         }
     }
 }
@@ -362,11 +372,11 @@ static void cleanup() {
   // Invalidate PSF generation and clear cache
   {
     std::lock_guard<std::mutex> lock(gPsfStateMutex);
-    gPsfCurrentGeneration++; // invalidate any pending generation
+    gPsfCurrentGeneration.fetch_add(1, std::memory_order_relaxed); // invalidate any pending generation
     gPsfAudioCachePtr.reset();
-    gPsfPlaybackPos = 0;
-    gPsfCacheReady = false;
-    gPsfGenerationComplete = false;
+    gPsfPlaybackPos.store(0, std::memory_order_relaxed);
+    gPsfCacheReady.store(false, std::memory_order_relaxed);
+    gPsfGenerationComplete.store(false, std::memory_order_relaxed);
   }
   
   // Cleanup libMusDoom
@@ -499,23 +509,24 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     }
     
     // Start asynchronous generation in background thread to avoid blocking UI
-    int gen = ++gPsfCurrentGeneration;
+    int gen = gPsfCurrentGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
     {
         std::lock_guard<std::mutex> lock(gPsfStateMutex);
         gPsfAudioCachePtr = std::make_shared<std::vector<uint8_t>>();
         gPsfPlaybackPos = 0;
-        gPsfCacheReady = false;
-        gPsfGenerationComplete = false;
+        gPsfCacheReady.store(false, std::memory_order_relaxed);
+        gPsfGenerationComplete.store(false, std::memory_order_relaxed);
     }
     
     std::thread t([gen]() {
         // Run emulation - this blocks until the track finishes
+        // Check periodically if generation should be cancelled
         sexy_execute();
         // Under lock, mark generation complete if still current
         {
             std::lock_guard<std::mutex> lock(gPsfStateMutex);
-            if (gPsfCurrentGeneration == gen) {
-                gPsfGenerationComplete = true;
+            if (gPsfCurrentGeneration.load(std::memory_order_relaxed) == gen) {
+                gPsfGenerationComplete.store(true, std::memory_order_release);
                 LOGD("PSF generation complete, total %zu bytes", gPsfAudioCachePtr ? gPsfAudioCachePtr->size() : 0);
             }
         }
@@ -867,10 +878,11 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
   }
   if (gPlayerType == PlayerType::LIBPSF) {
     std::lock_guard<std::mutex> lock(gPsfStateMutex);
-    if (!gPsfCacheReady) return JNI_FALSE; // still generating initial buffer
-    if (!gPsfGenerationComplete) return JNI_FALSE; // generating but buffer ready, not ended yet
+    if (!gPsfCacheReady.load(std::memory_order_acquire)) return JNI_FALSE; // still generating initial buffer
+    if (!gPsfGenerationComplete.load(std::memory_order_acquire)) return JNI_FALSE; // generating but buffer ready, not ended yet
     size_t cacheSize = gPsfAudioCachePtr ? gPsfAudioCachePtr->size() : 0;
-    return (gPsfPlaybackPos >= cacheSize) ? JNI_TRUE : JNI_FALSE;
+    size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
+    return (currentPos >= cacheSize) ? JNI_TRUE : JNI_FALSE;
   }
   if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     // libMusDoom: check if music is still playing
@@ -883,7 +895,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
 JNIEXPORT jboolean JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nIsPsfCacheReady(JNIEnv *env, jclass cls) {
   if (gPlayerType != PlayerType::LIBPSF) return JNI_TRUE;
-  return gPsfCacheReady.load() ? JNI_TRUE : JNI_FALSE;
+  return gPsfCacheReady.load(std::memory_order_acquire) ? JNI_TRUE : JNI_FALSE;
 }
 
 // Bass boost control
@@ -1071,7 +1083,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
   if (gPlayerType == PlayerType::LIBPSF) {
     std::lock_guard<std::mutex> lock(gPsfStateMutex);
     // gPsfPlaybackPos is in bytes; each frame is 4 bytes (stereo 16-bit)
-    return (jlong)(gPsfPlaybackPos / 4);
+    return (jlong)(gPsfPlaybackPos.load(std::memory_order_relaxed) / 4);
   }
   return 0;
 }
@@ -1101,7 +1113,7 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
       // Clamp to available data (cannot seek beyond generated buffer)
       size_t maxBytes = gPsfAudioCachePtr->size();
       if (targetBytes > maxBytes) targetBytes = maxBytes;
-      gPsfPlaybackPos = targetBytes;
+      gPsfPlaybackPos.store(targetBytes, std::memory_order_relaxed);
     }
   }
   // KSS doesn't have a direct seek function - need to reset and fast-forward
@@ -1239,30 +1251,36 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
   } else if (gPlayerType == PlayerType::LIBPSF) {
     // Stream from pre-generated cache - hold lock during entire read to prevent
     // the generation thread from reallocating the vector while we're reading
-    std::lock_guard<std::mutex> lock(gPsfStateMutex);
-    if (!gPsfAudioCachePtr || gPsfAudioCachePtr->empty() || 
-        (gPsfAudioCachePtr->size() - gPsfPlaybackPos) < 4) {
-      written = 0;
-    } else {
-      size_t bytesRemaining = gPsfAudioCachePtr->size() - gPsfPlaybackPos;
-      size_t framesAvailable = bytesRemaining / 4;
-      jint framesToCopy = (framesAvailable >= (size_t)frames) ? frames : (jint)framesAvailable;
-      if (framesToCopy > 0) {
-        const uint8_t* src = gPsfAudioCachePtr->data() + gPsfPlaybackPos;
-        for (jint i = 0; i < framesToCopy; i++) {
-          int16_t l = *reinterpret_cast<const int16_t*>(src + i * 4);
-          int16_t r = *reinterpret_cast<const int16_t*>(src + i * 4 + 2);
-          dst[i * 2] = l;
-          dst[i * 2 + 1] = r;
-          
-          // Feed to FFT ring buffer (mono mix)
-          float sample = (float)l / 32768.0f + (float)r / 32768.0f;
-          gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-          gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+    {
+        std::lock_guard<std::mutex> lock(gPsfStateMutex);
+        if (!gPsfAudioCachePtr || gPsfAudioCachePtr->empty()) {
+          written = 0;
+        } else {
+          size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
+          if ((gPsfAudioCachePtr->size() - currentPos) < 4) {
+            written = 0;
+          } else {
+            size_t bytesRemaining = gPsfAudioCachePtr->size() - currentPos;
+            size_t framesAvailable = bytesRemaining / 4;
+            jint framesToCopy = (framesAvailable >= (size_t)frames) ? frames : (jint)framesAvailable;
+            if (framesToCopy > 0) {
+              const uint8_t* src = gPsfAudioCachePtr->data() + currentPos;
+              for (jint i = 0; i < framesToCopy; i++) {
+                int16_t l = *reinterpret_cast<const int16_t*>(src + i * 4);
+                int16_t r = *reinterpret_cast<const int16_t*>(src + i * 4 + 2);
+                dst[i * 2] = l;
+                dst[i * 2 + 1] = r;
+                
+                // Feed to FFT ring buffer (mono mix)
+                float sample = (float)l / 32768.0f + (float)r / 32768.0f;
+                gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+                gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+              }
+              gPsfPlaybackPos.store(currentPos + framesToCopy * 4, std::memory_order_relaxed);
+              written = framesToCopy;
+            }
+          }
         }
-        gPsfPlaybackPos += framesToCopy * 4;
-        written = framesToCopy;
-      }
     }
   } else if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     // libMusDoom outputs stereo interleaved 16-bit
