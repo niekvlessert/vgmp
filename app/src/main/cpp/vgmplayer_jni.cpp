@@ -1816,6 +1816,75 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     return env->NewStringUTF(s.c_str());
   }
 
+  // Handle PSF format via libpsf
+  if (gPlayerType == PlayerType::LIBPSF && gPsfInfo) {
+    std::string s;
+
+    // TITLE
+    s += "TITLE";
+    s += "|||";
+    s += gPsfInfo->title ? gPsfInfo->title : "";
+    s += "|||";
+
+    // TITLE-JPN (not available in PSF)
+    s += "TITLE-JPN";
+    s += "|||";
+    s += "|||";
+
+    // GAME
+    s += "GAME";
+    s += "|||";
+    s += gPsfInfo->game ? gPsfInfo->game : "";
+    s += "|||";
+
+    // GAME-JPN
+    s += "GAME-JPN";
+    s += "|||";
+    s += "|||";
+
+    // SYSTEM
+    s += "SYSTEM";
+    s += "|||";
+    s += "PlayStation";
+    s += "|||";
+
+    // SYSTEM-JPN
+    s += "SYSTEM-JPN";
+    s += "|||";
+    s += "|||";
+
+    // ARTIST
+    s += "ARTIST";
+    s += "|||";
+    s += gPsfInfo->artist ? gPsfInfo->artist : "";
+    s += "|||";
+
+    // ARTIST-JPN
+    s += "ARTIST-JPN";
+    s += "|||";
+    s += "|||";
+
+    // DATE
+    s += "DATE";
+    s += "|||";
+    s += gPsfInfo->year ? gPsfInfo->year : "";
+    s += "|||";
+
+    // ENCODED_BY
+    s += "ENCODED_BY";
+    s += "|||";
+    s += gPsfInfo->psfby ? gPsfInfo->psfby : "";
+    s += "|||";
+
+    // COMMENT
+    s += "COMMENT";
+    s += "|||";
+    s += gPsfInfo->comment ? gPsfInfo->comment : "";
+    s += "|||";
+
+    return env->NewStringUTF(s.c_str());
+  }
+
   return env->NewStringUTF("");
 }
 
