@@ -87,6 +87,11 @@ static std::string gRomPath = "";
 static std::mutex gPsfStateMutex;
 static std::shared_ptr<std::vector<uint8_t>>
     gPsfAudioCachePtr; // cached audio after generation
+// Bytes that have been fully written and are safe to read without a lock.
+// Advanced AFTER insert() returns (not before), so the reader never sees
+// partial/relocated data. The vector is pre-reserved at open time so insert()
+// never reallocates — the raw buffer pointer stays stable forever.
+static std::atomic<size_t> gPsfCommittedBytes{0};
 static std::atomic<size_t> gPsfPlaybackPos{
     0}; // atomic playback position to avoid race conditions
 static std::atomic<bool> gPsfCacheReady{false};
@@ -150,28 +155,29 @@ static void fft_process(std::vector<Complex> &a) {
 // PSF callback: receives generated audio samples
 // Declared in libpsf/driver.h with extern "C"
 void sexyd_update(unsigned char *pSound, long lBytes) {
-  // Use double-buffering approach to avoid vector resizing during playback
-  if (lBytes <= 0)
+  if (lBytes <= 0 || !pSound)
     return;
 
-  // Create a temporary copy of the audio data to minimize lock time
-  std::vector<uint8_t> tempData(pSound, pSound + lBytes);
+  std::lock_guard<std::mutex> lock(gPsfStateMutex);
+  if (!gPsfAudioCachePtr)
+    return;
 
-  // Now safely append to the main cache with minimal lock time
-  {
-    std::lock_guard<std::mutex> lock(gPsfStateMutex);
-    if (gPsfAudioCachePtr) {
-      gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), tempData.begin(),
-                                tempData.end());
-      // Mark cache ready when we have at least 6 seconds of audio (44100
-      // frames/sec * 4 bytes/frame * 6) This provides enough buffer to avoid
-      // hickups during the initial playback phase
-      if (!gPsfCacheReady.load() &&
-          gPsfAudioCachePtr->size() >= 44100 * 4 * 6) {
-        gPsfCacheReady.store(true, std::memory_order_release);
-        LOGD("PSF cache ready with %zu bytes", gPsfAudioCachePtr->size());
-      }
-    }
+  // Pre-reserve on first real chunk — up to 20 min of stereo 16-bit audio.
+  // This means insert() will NEVER reallocate, keeping the raw buffer pointer
+  // stable so fillBuffer can read without the lock.
+  if (gPsfAudioCachePtr->capacity() == 0)
+    gPsfAudioCachePtr->reserve(44100 * 4 * 1200); // ~20 min
+
+  gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), pSound, pSound + lBytes);
+
+  // Advance committed bytes AFTER insert() returns, so the lock-free reader
+  // in fillBuffer only ever sees fully-written data.
+  gPsfCommittedBytes.store(gPsfAudioCachePtr->size(),
+                           std::memory_order_release);
+
+  if (!gPsfCacheReady.load() && gPsfAudioCachePtr->size() >= 44100 * 4 * 6) {
+    gPsfCacheReady.store(true, std::memory_order_release);
+    LOGD("PSF cache ready with %zu bytes", gPsfAudioCachePtr->size());
   }
 }
 
@@ -518,6 +524,7 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       std::lock_guard<std::mutex> lock(gPsfStateMutex);
       gPsfAudioCachePtr = std::make_shared<std::vector<uint8_t>>();
       gPsfPlaybackPos = 0;
+      gPsfCommittedBytes.store(0, std::memory_order_relaxed);
       gPsfCacheReady.store(false, std::memory_order_relaxed);
       gPsfGenerationComplete.store(false, std::memory_order_relaxed);
     }
@@ -1282,48 +1289,44 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       }
     }
   } else if (gPlayerType == PlayerType::LIBPSF) {
-    // Stream from pre-generated cache - hold lock during entire read to prevent
-    // the generation thread from reallocating the vector while we're reading
+    // Lock-free read: gPsfCommittedBytes is advanced by sexyd_update AFTER
+    // each insert(), so it only ever points to fully-written data.
+    // The vector is pre-reserved so it never reallocates — the raw data
+    // pointer is stable for the lifetime of the track.
     static int psfZeroLogCounter = 0;
+    size_t committed = gPsfCommittedBytes.load(std::memory_order_acquire);
+    size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
+    const uint8_t *rawBuf = nullptr;
     {
+      // One brief lock just to read the raw pointer (zero-copy, fast).
       std::lock_guard<std::mutex> lock(gPsfStateMutex);
-      if (!gPsfAudioCachePtr || gPsfAudioCachePtr->empty()) {
-        if (psfZeroLogCounter++ % 100 == 0) {
-          LOGD("PSF buffer empty or null");
-        }
-        written = 0;
-      } else {
-        size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
-        if ((gPsfAudioCachePtr->size() - currentPos) < 4) {
-          if (psfZeroLogCounter++ % 100 == 0) {
-            LOGD("PSF buffer underrun: size=%zu, pos=%zu",
-                 gPsfAudioCachePtr->size(), currentPos);
-          }
-          written = 0;
-        } else {
-          size_t bytesRemaining = gPsfAudioCachePtr->size() - currentPos;
-          size_t framesAvailable = bytesRemaining / 4;
-          jint framesToCopy = (framesAvailable >= (size_t)frames)
-                                  ? frames
-                                  : (jint)framesAvailable;
-          if (framesToCopy > 0) {
-            const uint8_t *src = gPsfAudioCachePtr->data() + currentPos;
-            for (jint i = 0; i < framesToCopy; i++) {
-              int16_t l = *reinterpret_cast<const int16_t *>(src + i * 4);
-              int16_t r = *reinterpret_cast<const int16_t *>(src + i * 4 + 2);
-              dst[i * 2] = l;
-              dst[i * 2 + 1] = r;
+      if (gPsfAudioCachePtr && committed > 0)
+        rawBuf = gPsfAudioCachePtr->data();
+    }
+    if (!rawBuf || committed <= currentPos + 4) {
+      if (psfZeroLogCounter++ % 100 == 0)
+        LOGD("PSF underrun: committed=%zu pos=%zu", committed, currentPos);
+      written = 0;
+    } else {
+      size_t bytesAvailable = committed - currentPos;
+      size_t framesAvailable = bytesAvailable / 4;
+      jint framesToCopy =
+          (framesAvailable >= (size_t)frames) ? frames : (jint)framesAvailable;
+      if (framesToCopy > 0) {
+        // Safe: rawBuf is stable (pre-reserved), bytes are committed.
+        memcpy(dst, rawBuf + currentPos, (size_t)framesToCopy * 4);
 
-              // Feed to FFT ring buffer (mono mix)
-              float sample = (float)l / 32768.0f + (float)r / 32768.0f;
-              gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-              gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
-            }
-            gPsfPlaybackPos.store(currentPos + framesToCopy * 4,
-                                  std::memory_order_relaxed);
-            written = framesToCopy;
-          }
+        for (jint i = 0; i < framesToCopy; i++) {
+          int16_t l = dst[i * 2];
+          int16_t r = dst[i * 2 + 1];
+          float sample = (float)l / 32768.0f + (float)r / 32768.0f;
+          gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+          gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
         }
+
+        gPsfPlaybackPos.store(currentPos + (size_t)framesToCopy * 4,
+                              std::memory_order_relaxed);
+        written = framesToCopy;
       }
     }
   } else if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
@@ -1817,9 +1820,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
 }
 
 /**
- * Scan a VGM file to get its length in samples without loading it as the active
- * track. For multi-track files (NSF), returns length for track 0.
- * Use nGetTrackLength for specific track index.
+ * Scan a VGM file to get its length in samples without loading it as the
+ * active track. For multi-track files (NSF), returns length for track 0. Use
+ * nGetTrackLength for specific track index.
  */
 JNIEXPORT jlong JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
@@ -2064,8 +2067,8 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceCount(
     }
   }
   // libgme doesn't support per-voice volume control, so return 0 to hide
-  // sliders (gme_voice_count returns number of voices/channels, but they can't
-  // be controlled)
+  // sliders (gme_voice_count returns number of voices/channels, but they
+  // can't be controlled)
   return 0;
 }
 
@@ -2126,9 +2129,9 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelCount(
         // Get device options to find channel count from muting mask
         PLR_DEV_OPTS devOpts;
         if (gVgmPlayer->GetDeviceOptions(dev.id, devOpts) <= 0x01) {
-          // Check how many bits are set in chnMute masks (but actually we need
-          // to know total channels) Wait, how does libvgm report channel count?
-          // Let's check devDecl
+          // Check how many bits are set in chnMute masks (but actually we
+          // need to know total channels) Wait, how does libvgm report channel
+          // count? Let's check devDecl
           if (dev.devDecl) {
             // For now, let's assume standard channel counts for known chips
             switch (dev.type) {
@@ -2658,7 +2661,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsMultiTrack(JNIEnv *env, jclass cls,
   return result ? JNI_TRUE : JNI_FALSE;
 }
 
-// Get track length for a specific track index (for multi-track files like NSF)
+// Get track length for a specific track index (for multi-track files like
+// NSF)
 JNIEXPORT jlong JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLength(
     JNIEnv *env, jclass cls, jstring jpath, jint trackIndex) {
   const char *path = env->GetStringUTFChars(jpath, nullptr);
@@ -2713,7 +2717,8 @@ JNIEXPORT jlong JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLength(
                                                                        jpath);
 }
 
-// Get KSS track count directly from file path (without opening as active track)
+// Get KSS track count directly from file path (without opening as active
+// track)
 JNIEXPORT jint JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackCountDirect(JNIEnv *env,
                                                                 jclass cls,
@@ -2746,7 +2751,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackCountDirect(JNIEnv *env,
   fread(fileData.data(), 1, fileSize, f);
   fclose(f);
 
-  // Create temporary KSS object using KSS_bin2kss which properly parses headers
+  // Create temporary KSS object using KSS_bin2kss which properly parses
+  // headers
   KSS *kss = KSS_bin2kss(fileData.data(), fileSize, filename);
   if (!kss) {
     LOGE("Failed to create KSS object for track count");
@@ -2805,7 +2811,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackRange(JNIEnv *env,
   fread(fileData.data(), 1, fileSize, f);
   fclose(f);
 
-  // Create temporary KSS object using KSS_bin2kss which properly parses headers
+  // Create temporary KSS object using KSS_bin2kss which properly parses
+  // headers
   KSS *kss = KSS_bin2kss(fileData.data(), fileSize, filename);
   if (!kss) {
     return result;

@@ -502,6 +502,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                             VgmEngine.getSpectrum(spectrumBuffer)
                             _spectrum.emit(spectrumBuffer.copyOf())
                         }
+                    } else {
+                        // fillBuffer returned 0 — PSF generation thread hasn't caught up yet.
+                        // Yield CPU for a short time so the generation thread can make progress
+                        // instead of busy-spinning and starving it, which causes AudioTrack underruns.
+                        delay(5)
                     }
                     
                     // Periodically update playback state for position tracking (must be BEFORE endless loop check)
