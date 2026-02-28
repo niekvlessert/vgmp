@@ -1027,7 +1027,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
       }
 
       // If length is unreasonably short (< 30 seconds), default to 3 minutes
-      if (length_ms < 30000) {
+      if (length_ms < 1000) {
         length_ms = 180000;
       }
 
@@ -1928,7 +1928,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
 
     // If length is unreasonably short (< 30 seconds), default to 3 minutes
     // SPC and NSF files typically loop and don't have a fixed duration
-    if (length_ms < 30000) {
+    if (length_ms < 1000) {
       length_ms = 180000; // 3 minutes default
     }
 
@@ -2767,9 +2767,9 @@ JNIEXPORT jlong JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLength(
       length_ms = intro_ms + loop_ms * 2;
     }
 
-    // If length is unreasonably short (< 30 seconds), default to 3 minutes
+    // If length is unreasonably short (< 1 second), default to 3 minutes
     // SPC and NSF files typically loop and don't have a fixed duration
-    if (length_ms < 30000) {
+    if (length_ms < 1000) {
       length_ms = 180000; // 3 minutes default
     }
 
