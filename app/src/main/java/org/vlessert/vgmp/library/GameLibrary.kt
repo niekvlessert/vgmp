@@ -340,52 +340,31 @@ object GameLibrary {
             return Game(finalGame, tracks, artBytes)
         }
 
-        val tempGameEntity = GameEntity(
-            name = gameName, system = systemName, author = authorName, year = yearStr,
-            folderPath = gameFolder.absolutePath,
-            artPath = artFile?.absolutePath ?: "",
-            zipSource = zipName
-        )
-        val gameId = db.gameDao().insertGame(tempGameEntity)
 
-        // Scan tracks for duration + tags
+        // Get tags from first track BEFORE inserting into DB, so we store the
+        // correct system/soundChips from the start (avoids the tempGameEntity
+        // written with empty fields which sometimes isn't updated if re-import
+        // logic short-circuits later).
         var soundChips = ""
-        // MUS files carry no GD3/ID3 tags, so skip VgmEngine.open() for
-        // metadata — just set Doom defaults directly. Duration is still
-        // obtained via getTrackLengthDirect, which now handles MUS properly
-        // (fast in-memory MUS→MIDI + adl_totalTimeLength, no audio rendered).
         val isMusGame = sortedVgm.all { it.extension.equals("mus", ignoreCase = true) ||
                                         it.extension.equals("lmp", ignoreCase = true) }
         if (isMusGame) {
             if (systemName.isEmpty()) systemName = "Doom (OPL)"
             soundChips = "OPL2/OPL3"
-        }
-        sortedVgm.forEachIndexed { idx, vgmFile ->
-            val durationSamples = try {
-                VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get duration for ${vgmFile.name}", e)
-                -1L
-            }
-
-            // Get tags from first track only (for game name) — skip for MUS
-            // since MUS files carry no embeddable metadata.
-            if (idx == 0 && !isMusGame) {
+        } else {
+            val firstVgm = sortedVgm.firstOrNull()
+            if (firstVgm != null) {
                 try {
-                    if (VgmEngine.open(vgmFile.absolutePath)) {
+                    if (VgmEngine.open(firstVgm.absolutePath)) {
                         val tags = VgmEngine.parseTags(VgmEngine.getTags())
-                        // Use English game name, fallback to Japanese
                         if (tags.gameEn.isNotEmpty()) gameName = tags.gameEn
                         else if (tags.gameJp.isNotEmpty()) gameName = tags.gameJp
-                        // Use English system name, fallback to Japanese
                         if (tags.systemEn.isNotEmpty()) systemName = tags.systemEn
                         else if (tags.systemJp.isNotEmpty()) systemName = tags.systemJp
-                        // Use English author name, fallback to Japanese
                         if (tags.authorEn.isNotEmpty()) authorName = tags.authorEn
                         else if (tags.authorJp.isNotEmpty()) authorName = tags.authorJp
                         yearStr = tags.date
-                        
-                        // Get sound chips for VGM files
+
                         try {
                             val deviceCount = VgmEngine.getDeviceCount()
                             if (deviceCount > 0) {
@@ -397,21 +376,46 @@ object GameLibrary {
                                 soundChips = chipNames.joinToString(", ")
                             }
                         } catch (e: Exception) {
-                            Log.w(TAG, "Could not get sound chips from ${vgmFile.name}")
+                            Log.w(TAG, "Could not get sound chips from ${firstVgm.name}")
                         }
-                        
+
                         VgmEngine.close()
                     }
-                } catch (e: Exception) { Log.w(TAG, "Could not get tags from ${vgmFile.name}") }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not get tags from ${firstVgm.name}")
+                }
+            }
+        }
+
+        // Detect if this is a MIDI-only zip and set system accordingly
+        val hasMidiFiles = sortedVgm.any { it.extension.equals("mid", ignoreCase = true) || it.extension.equals("midi", ignoreCase = true) }
+        val resolvedSystemName = if (systemName.isEmpty() && hasMidiFiles) "(MIDI)" else systemName
+
+        val tempGameEntity = GameEntity(
+            name = gameName, system = resolvedSystemName, author = authorName, year = yearStr,
+            folderPath = gameFolder.absolutePath,
+            artPath = artFile?.absolutePath ?: "",
+            zipSource = zipName,
+            soundChips = soundChips
+        )
+        val gameId = db.gameDao().insertGame(tempGameEntity)
+
+        // Scan all tracks for duration
+        sortedVgm.forEachIndexed { idx, vgmFile ->
+            val durationSamples = try {
+                VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to get duration for ${vgmFile.name}", e)
+                -1L
             }
 
             val originalFilenameForTitle = vgmFile.name
-            val displayTitle = m3uTitles[originalFilenameForTitle] 
-                ?: m3uTitles.entries.firstOrNull { it.key.equals(originalFilenameForTitle, ignoreCase = true) }?.value 
+            val displayTitle = m3uTitles[originalFilenameForTitle]
+                ?: m3uTitles.entries.firstOrNull { it.key.equals(originalFilenameForTitle, ignoreCase = true) }?.value
                 ?: vgmFile.nameWithoutExtension
 
             trackEntities.add(TrackEntity(
-                id = 0, // Auto-generated
+                id = 0,
                 gameId = gameId,
                 title = displayTitle,
                 filePath = vgmFile.absolutePath,
@@ -422,14 +426,11 @@ object GameLibrary {
         }
 
         // Update game with resolved name
-        // Detect if this is a MIDI-only zip and set system accordingly
-        val hasMidiFiles = sortedVgm.any { it.extension.equals("mid", ignoreCase = true) || it.extension.equals("midi", ignoreCase = true) }
-        val finalSystemName = if (systemName.isEmpty() && hasMidiFiles) "(MIDI)" else systemName
-        
+        // Update game with resolved name (gameName may have been updated from tags above)
         val gameEntity = GameEntity(
             id = gameId,
             name = gameName,
-            system = finalSystemName,
+            system = resolvedSystemName,
             author = authorName,
             year = yearStr,
             folderPath = gameFolder.absolutePath,
