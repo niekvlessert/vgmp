@@ -47,9 +47,9 @@ diff --git a/vgmplayer_jni.cpp b/vgmplayer_jni.cpp
 +        std::lock_guard<std::mutex> lock(gPsfStateMutex);
 +        if (gPsfAudioCachePtr) {
 +            gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), tempData.begin(), tempData.end());
-+            // Mark cache ready when we have at least 2 seconds of audio (44100 frames/sec * 4 bytes/frame * 2)
-+            // This provides faster startup while maintaining smooth playback
-+            if (!gPsfCacheReady.load() && gPsfAudioCachePtr->size() >= 44100 * 4 * 2) {
++            // Mark cache ready when we have at least 6 seconds of audio (44100 frames/sec * 4 bytes/frame * 6)
++            // This provides enough buffer to avoid hickups during the initial playback phase
++            if (!gPsfCacheReady.load() && gPsfAudioCachePtr->size() >= 44100 * 4 * 6) {
 +                gPsfCacheReady.store(true, std::memory_order_release);
 +                LOGD("PSF cache ready with %zu bytes", gPsfAudioCachePtr->size());
 +            }

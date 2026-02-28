@@ -350,16 +350,27 @@ object GameLibrary {
 
         // Scan tracks for duration + tags
         var soundChips = ""
+        // MUS files carry no GD3/ID3 tags, so skip VgmEngine.open() for
+        // metadata — just set Doom defaults directly. Duration is still
+        // obtained via getTrackLengthDirect, which now handles MUS properly
+        // (fast in-memory MUS→MIDI + adl_totalTimeLength, no audio rendered).
+        val isMusGame = sortedVgm.all { it.extension.equals("mus", ignoreCase = true) ||
+                                        it.extension.equals("lmp", ignoreCase = true) }
+        if (isMusGame) {
+            if (systemName.isEmpty()) systemName = "Doom (OPL)"
+            soundChips = "OPL2/OPL3"
+        }
         sortedVgm.forEachIndexed { idx, vgmFile ->
             val durationSamples = try {
                 VgmEngine.getTrackLengthDirect(vgmFile.absolutePath)
-            } catch (e: Exception) { 
+            } catch (e: Exception) {
                 Log.e(TAG, "Failed to get duration for ${vgmFile.name}", e)
-                -1L 
+                -1L
             }
 
-            // Get tags from first track only (for game name)
-            if (idx == 0) {
+            // Get tags from first track only (for game name) — skip for MUS
+            // since MUS files carry no embeddable metadata.
+            if (idx == 0 && !isMusGame) {
                 try {
                     if (VgmEngine.open(vgmFile.absolutePath)) {
                         val tags = VgmEngine.parseTags(VgmEngine.getTags())
@@ -385,8 +396,8 @@ object GameLibrary {
                                 }
                                 soundChips = chipNames.joinToString(", ")
                             }
-                        } catch (e: Exception) { 
-                            Log.w(TAG, "Could not get sound chips from ${vgmFile.name}") 
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Could not get sound chips from ${vgmFile.name}")
                         }
                         
                         VgmEngine.close()

@@ -254,7 +254,14 @@ class GameAdapter(
         notifyDataSetChanged()
     }
 
-    fun notifyNowPlaying() = notifyDataSetChanged()
+    fun notifyNowPlaying() {
+        // Only rebind expanded game items that might show a track highlight —
+        // calling notifyDataSetChanged() here is very expensive when a Doom game
+        // with 30+ track views is expanded, because it re-inflates every row.
+        games.forEachIndexed { index, game ->
+            if (expandedGames.contains(game.id)) notifyItemChanged(index)
+        }
+    }
 
     override fun getItemCount() = games.size
 

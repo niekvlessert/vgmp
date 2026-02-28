@@ -1,9 +1,10 @@
 /*
  * vgmplayer_jni.cpp
  *
- * JNI glue layer between Android/Kotlin and libvgm/libgme/libopenmpt/libADLMIDI/libMusDoom.
- * Supports VGM/VGZ via libvgm, NSF/NSFE/GBS/SPC/etc via libgme,
- * MOD/XM/S3M/IT/etc via libopenmpt, MIDI via libADLMIDI, and MUS via libMusDoom.
+ * JNI glue layer between Android/Kotlin and
+ * libvgm/libgme/libopenmpt/libADLMIDI/libMusDoom. Supports VGM/VGZ via libvgm,
+ * NSF/NSFE/GBS/SPC/etc via libgme, MOD/XM/S3M/IT/etc via libopenmpt, MIDI via
+ * libADLMIDI, and MUS via libMusDoom.
  */
 
 #include <algorithm>
@@ -32,23 +33,32 @@
 #include "libopenmpt/libopenmpt.h"
 
 // libkss for KSS format (MSX music files)
-#include "kssplay.h"
 #include "kss/kss.h"
+#include "kssplay.h"
 
 // libADLMIDI for MIDI files (OPL3 FM synthesis)
 #include "adlmidi.h"
 
 // libMusDoom for Doom MUS files (OPL2/OPL3 FM synthesis)
 #include "libmusdoom.h"
-#include "mus2mid.h"
-#include "memio.h"
 #include "libpsf/driver.h"
+#include "memio.h"
+#include "mus2mid.h"
 
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "VgmJNI", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VgmJNI", __VA_ARGS__)
 
 // Player type enumeration
-enum class PlayerType { NONE, LIBVGM, LIBGME, LIBOPENMPT, LIBKSS, LIBADLMIDI, LIBMUSDOOM, LIBPSF };
+enum class PlayerType {
+  NONE,
+  LIBVGM,
+  LIBGME,
+  LIBOPENMPT,
+  LIBKSS,
+  LIBADLMIDI,
+  LIBMUSDOOM,
+  LIBPSF
+};
 
 static PlayerType gPlayerType = PlayerType::NONE;
 static VGMPlayer *gVgmPlayer = nullptr;
@@ -59,25 +69,30 @@ static KSSPLAY *gKssPlay = nullptr;
 static ADL_MIDIPlayer *gAdlPlayer = nullptr;
 static musdoom_emulator_t *gMusDoomPlayer = nullptr;
 static PSFINFO *gPsfInfo = nullptr;
-static std::vector<uint8_t> gMusDoomData;  // MUS data must remain valid during playback
-static std::vector<uint8_t> gMusDoomMidiData;  // Converted MIDI data for MUS playback
+static std::vector<uint8_t>
+    gMusDoomData; // MUS data must remain valid during playback
+static std::vector<uint8_t>
+    gMusDoomMidiData; // Converted MIDI data for MUS playback
 static DATA_LOADER *gLoader = nullptr;
 static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
 static UINT32 gSampleRate = 44100;
 static std::string gRomPath = "";
 
-// PSF playback state - asynchronous generation and streaming with improved thread safety
+// PSF playback state - asynchronous generation and streaming with improved
+// thread safety
 #include <atomic>
-#include <thread>
 #include <memory>
+#include <thread>
 static std::mutex gPsfStateMutex;
-static std::shared_ptr<std::vector<uint8_t>> gPsfAudioCachePtr;  // cached audio after generation
-static std::atomic<size_t> gPsfPlaybackPos{0};                  // atomic playback position to avoid race conditions
+static std::shared_ptr<std::vector<uint8_t>>
+    gPsfAudioCachePtr; // cached audio after generation
+static std::atomic<size_t> gPsfPlaybackPos{
+    0}; // atomic playback position to avoid race conditions
 static std::atomic<bool> gPsfCacheReady{false};
 static std::atomic<int> gPsfCurrentGeneration{0};
 static std::atomic<bool> gPsfGenerationComplete{false};
-static std::thread gPsfGenerationThread;    // thread handle for PSF generation
+static std::thread gPsfGenerationThread; // thread handle for PSF generation
 
 // Current track index for libgme (NSF can have multiple tracks)
 static int gGmeTrackIndex = 0;
@@ -101,8 +116,8 @@ static bool gBassEnabled = false;
 static bool gReverbEnabled = false;
 
 // Simple reverb state
-#define REVERB_DELAY_SAMPLES 4410  // ~100ms at 44100Hz
-static float gReverbBuffer[REVERB_DELAY_SAMPLES * 2];  // stereo
+#define REVERB_DELAY_SAMPLES 4410                     // ~100ms at 44100Hz
+static float gReverbBuffer[REVERB_DELAY_SAMPLES * 2]; // stereo
 static int gReverbWritePos = 0;
 
 typedef std::complex<float> Complex;
@@ -134,26 +149,30 @@ static void fft_process(std::vector<Complex> &a) {
 
 // PSF callback: receives generated audio samples
 // Declared in libpsf/driver.h with extern "C"
-void sexyd_update(unsigned char* pSound, long lBytes) {
-    // Use double-buffering approach to avoid vector resizing during playback
-    if (lBytes <= 0) return;
+void sexyd_update(unsigned char *pSound, long lBytes) {
+  // Use double-buffering approach to avoid vector resizing during playback
+  if (lBytes <= 0)
+    return;
 
-    // Create a temporary copy of the audio data to minimize lock time
-    std::vector<uint8_t> tempData(pSound, pSound + lBytes);
+  // Create a temporary copy of the audio data to minimize lock time
+  std::vector<uint8_t> tempData(pSound, pSound + lBytes);
 
-    // Now safely append to the main cache with minimal lock time
-    {
-        std::lock_guard<std::mutex> lock(gPsfStateMutex);
-        if (gPsfAudioCachePtr) {
-            gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), tempData.begin(), tempData.end());
-            // Mark cache ready when we have at least 2 seconds of audio (44100 frames/sec * 4 bytes/frame * 2)
-            // This provides faster startup while maintaining smooth playback
-            if (!gPsfCacheReady.load() && gPsfAudioCachePtr->size() >= 44100 * 4 * 2) {
-                    gPsfCacheReady.store(true, std::memory_order_release);
-                LOGD("PSF cache ready with %zu bytes", gPsfAudioCachePtr->size());
-            }
-        }
+  // Now safely append to the main cache with minimal lock time
+  {
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    if (gPsfAudioCachePtr) {
+      gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), tempData.begin(),
+                                tempData.end());
+      // Mark cache ready when we have at least 6 seconds of audio (44100
+      // frames/sec * 4 bytes/frame * 6) This provides enough buffer to avoid
+      // hickups during the initial playback phase
+      if (!gPsfCacheReady.load() &&
+          gPsfAudioCachePtr->size() >= 44100 * 4 * 6) {
+        gPsfCacheReady.store(true, std::memory_order_release);
+        LOGD("PSF cache ready with %zu bytes", gPsfAudioCachePtr->size());
+      }
     }
+  }
 }
 
 static DATA_LOADER *RequestFileCallback(void *userParam, PlayerBase *player,
@@ -183,146 +202,129 @@ static DATA_LOADER *RequestFileCallback(void *userParam, PlayerBase *player,
 // Check if file extension is PSF/PSF1 format
 static bool isPsfFormat(const char *path) {
   const char *ext = strrchr(path, '.');
-  if (!ext) return false;
+  if (!ext)
+    return false;
   ext++; // skip the dot
-  
+
   // Convert to lowercase for comparison
   char lowerExt[8] = {0};
   for (int i = 0; ext[i] && i < 7; i++) {
     lowerExt[i] = tolower(ext[i]);
   }
-  
+
   return (strcmp(lowerExt, "psf") == 0 || strcmp(lowerExt, "minipsf") == 0);
 }
 
 // Check if file extension is supported by libgme
 static bool isGmeFormat(const char *path) {
   const char *ext = strrchr(path, '.');
-  if (!ext) return false;
+  if (!ext)
+    return false;
   ext++; // skip the dot
-  
+
   // Convert to lowercase for comparison
   char lowerExt[8] = {0};
   for (int i = 0; ext[i] && i < 7; i++) {
     lowerExt[i] = tolower(ext[i]);
   }
-  
+
   // libgme supported formats (KSS removed - now using libkss)
-  return (strcmp(lowerExt, "nsf") == 0 ||
-          strcmp(lowerExt, "nsfe") == 0 ||
-          strcmp(lowerExt, "gbs") == 0 ||
-          strcmp(lowerExt, "gym") == 0 ||
-          strcmp(lowerExt, "hes") == 0 ||
-          strcmp(lowerExt, "ay") == 0 ||
-          strcmp(lowerExt, "sap") == 0 ||
-          strcmp(lowerExt, "spc") == 0);
+  return (strcmp(lowerExt, "nsf") == 0 || strcmp(lowerExt, "nsfe") == 0 ||
+          strcmp(lowerExt, "gbs") == 0 || strcmp(lowerExt, "gym") == 0 ||
+          strcmp(lowerExt, "hes") == 0 || strcmp(lowerExt, "ay") == 0 ||
+          strcmp(lowerExt, "sap") == 0 || strcmp(lowerExt, "spc") == 0);
 }
 
 // Check if file extension is KSS format (MSX music)
 static bool isKssFormat(const char *path) {
   const char *ext = strrchr(path, '.');
-  if (!ext) return false;
+  if (!ext)
+    return false;
   ext++; // skip the dot
-  
+
   // Convert to lowercase for comparison
   char lowerExt[8] = {0};
   for (int i = 0; ext[i] && i < 7; i++) {
     lowerExt[i] = tolower(ext[i]);
   }
-  
+
   // KSS and related MSX formats
-  return (strcmp(lowerExt, "kss") == 0 ||
-          strcmp(lowerExt, "mgs") == 0 ||
-          strcmp(lowerExt, "bgm") == 0 ||
-          strcmp(lowerExt, "opx") == 0 ||
-          strcmp(lowerExt, "mpk") == 0 ||
-          strcmp(lowerExt, "mbm") == 0);
+  return (strcmp(lowerExt, "kss") == 0 || strcmp(lowerExt, "mgs") == 0 ||
+          strcmp(lowerExt, "bgm") == 0 || strcmp(lowerExt, "opx") == 0 ||
+          strcmp(lowerExt, "mpk") == 0 || strcmp(lowerExt, "mbm") == 0);
 }
 
 // Check if file extension is a tracker format supported by libopenmpt
 static bool isOpenmptFormat(const char *path) {
   const char *ext = strrchr(path, '.');
-  if (!ext) return false;
+  if (!ext)
+    return false;
   ext++; // skip the dot
-  
+
   // Convert to lowercase for comparison
   char lowerExt[8] = {0};
   for (int i = 0; ext[i] && i < 7; i++) {
     lowerExt[i] = tolower(ext[i]);
   }
-  
+
   // libopenmpt supported formats (most common ones)
-  return (strcmp(lowerExt, "mod") == 0 ||
-          strcmp(lowerExt, "xm") == 0 ||
-          strcmp(lowerExt, "s3m") == 0 ||
-          strcmp(lowerExt, "it") == 0 ||
-          strcmp(lowerExt, "mptm") == 0 ||
-          strcmp(lowerExt, "669") == 0 ||
-          strcmp(lowerExt, "amf") == 0 ||
-          strcmp(lowerExt, "ams") == 0 ||
-          strcmp(lowerExt, "dbm") == 0 ||
-          strcmp(lowerExt, "digi") == 0 ||
-          strcmp(lowerExt, "dmf") == 0 ||
-          strcmp(lowerExt, "dsm") == 0 ||
-          strcmp(lowerExt, "far") == 0 ||
-          strcmp(lowerExt, "gdm") == 0 ||
-          strcmp(lowerExt, "imf") == 0 ||
-          strcmp(lowerExt, "j2b") == 0 ||
-          strcmp(lowerExt, "mdl") == 0 ||
-          strcmp(lowerExt, "med") == 0 ||
-          strcmp(lowerExt, "mt2") == 0 ||
-          strcmp(lowerExt, "mtm") == 0 ||
-          strcmp(lowerExt, "okt") == 0 ||
-          strcmp(lowerExt, "plm") == 0 ||
-          strcmp(lowerExt, "psm") == 0 ||
-          strcmp(lowerExt, "ptm") == 0 ||
-          strcmp(lowerExt, "rtm") == 0 ||
-          strcmp(lowerExt, "stm") == 0 ||
-          strcmp(lowerExt, "ult") == 0 ||
-          strcmp(lowerExt, "umx") == 0 ||
+  return (strcmp(lowerExt, "mod") == 0 || strcmp(lowerExt, "xm") == 0 ||
+          strcmp(lowerExt, "s3m") == 0 || strcmp(lowerExt, "it") == 0 ||
+          strcmp(lowerExt, "mptm") == 0 || strcmp(lowerExt, "669") == 0 ||
+          strcmp(lowerExt, "amf") == 0 || strcmp(lowerExt, "ams") == 0 ||
+          strcmp(lowerExt, "dbm") == 0 || strcmp(lowerExt, "digi") == 0 ||
+          strcmp(lowerExt, "dmf") == 0 || strcmp(lowerExt, "dsm") == 0 ||
+          strcmp(lowerExt, "far") == 0 || strcmp(lowerExt, "gdm") == 0 ||
+          strcmp(lowerExt, "imf") == 0 || strcmp(lowerExt, "j2b") == 0 ||
+          strcmp(lowerExt, "mdl") == 0 || strcmp(lowerExt, "med") == 0 ||
+          strcmp(lowerExt, "mt2") == 0 || strcmp(lowerExt, "mtm") == 0 ||
+          strcmp(lowerExt, "okt") == 0 || strcmp(lowerExt, "plm") == 0 ||
+          strcmp(lowerExt, "psm") == 0 || strcmp(lowerExt, "ptm") == 0 ||
+          strcmp(lowerExt, "rtm") == 0 || strcmp(lowerExt, "stm") == 0 ||
+          strcmp(lowerExt, "ult") == 0 || strcmp(lowerExt, "umx") == 0 ||
           strcmp(lowerExt, "wow") == 0);
 }
 
 // Check if file extension is a MIDI format supported by libADLMIDI
 static bool isMidiFormat(const char *path) {
   const char *ext = strrchr(path, '.');
-  if (!ext) return false;
+  if (!ext)
+    return false;
   ext++; // skip the dot
-  
+
   // Convert to lowercase for comparison
   char lowerExt[8] = {0};
   for (int i = 0; ext[i] && i < 7; i++) {
     lowerExt[i] = tolower(ext[i]);
   }
-  
+
   // MIDI file formats
-  return (strcmp(lowerExt, "mid") == 0 ||
-          strcmp(lowerExt, "midi") == 0 ||
-          strcmp(lowerExt, "rmi") == 0 ||
-          strcmp(lowerExt, "smf") == 0);
+  return (strcmp(lowerExt, "mid") == 0 || strcmp(lowerExt, "midi") == 0 ||
+          strcmp(lowerExt, "rmi") == 0 || strcmp(lowerExt, "smf") == 0);
 }
 
 // Check if file extension is a MUS format (Doom music) supported by libMusDoom
 static bool isMusFormat(const char *path) {
   const char *ext = strrchr(path, '.');
-  if (!ext) return false;
+  if (!ext)
+    return false;
   ext++; // skip the dot
-  
+
   // Convert to lowercase for comparison
   char lowerExt[8] = {0};
   for (int i = 0; ext[i] && i < 7; i++) {
     lowerExt[i] = tolower(ext[i]);
   }
-  
-  // MUS file formats - .mus is the standard, .lmp is commonly used for Doom lumps
-  return (strcmp(lowerExt, "mus") == 0 ||
-          strcmp(lowerExt, "lmp") == 0);
+
+  // MUS file formats - .mus is the standard, .lmp is commonly used for Doom
+  // lumps
+  return (strcmp(lowerExt, "mus") == 0 || strcmp(lowerExt, "lmp") == 0);
 }
 
 static void cleanup() {
   // Reset channel muted states
   gGmeMutedChannels.clear();
-  
+
   // Cleanup libvgm
   if (gVgmPlayer) {
     gVgmPlayer->Stop();
@@ -330,19 +332,19 @@ static void cleanup() {
     delete gVgmPlayer;
     gVgmPlayer = nullptr;
   }
-  
+
   // Cleanup libgme
   if (gGmePlayer) {
     gme_delete(gGmePlayer);
     gGmePlayer = nullptr;
   }
-  
+
   // Cleanup libopenmpt
   if (gOpenmptModule) {
     openmpt_module_destroy(gOpenmptModule);
     gOpenmptModule = nullptr;
   }
-  
+
   // Cleanup libkss
   if (gKssPlay) {
     KSSPLAY_delete(gKssPlay);
@@ -352,13 +354,13 @@ static void cleanup() {
     KSS_delete(gKss);
     gKss = nullptr;
   }
-  
+
   // Cleanup libADLMIDI
   if (gAdlPlayer) {
     adl_close(gAdlPlayer);
     gAdlPlayer = nullptr;
   }
-  
+
   // Cleanup libpsf
   if (gPsfInfo) {
     sexy_freepsfinfo(gPsfInfo);
@@ -372,13 +374,14 @@ static void cleanup() {
   // Invalidate PSF generation and clear cache
   {
     std::lock_guard<std::mutex> lock(gPsfStateMutex);
-    gPsfCurrentGeneration.fetch_add(1, std::memory_order_relaxed); // invalidate any pending generation
+    gPsfCurrentGeneration.fetch_add(
+        1, std::memory_order_relaxed); // invalidate any pending generation
     gPsfAudioCachePtr.reset();
     gPsfPlaybackPos.store(0, std::memory_order_relaxed);
     gPsfCacheReady.store(false, std::memory_order_relaxed);
     gPsfGenerationComplete.store(false, std::memory_order_relaxed);
   }
-  
+
   // Cleanup libMusDoom
   if (gMusDoomPlayer) {
     musdoom_stop(gMusDoomPlayer);
@@ -390,13 +393,13 @@ static void cleanup() {
   gMusDoomData.shrink_to_fit();
   gMusDoomMidiData.clear();
   gMusDoomMidiData.shrink_to_fit();
-  
+
   gPlayerType = PlayerType::NONE;
   gGmeTrackIndex = 0;
   gGmeTrackCount = 0;
   gKssTrackIndex = 0;
   gKssTrackCount = 0;
-  
+
   if (gLoader) {
     DataLoader_Deinit(gLoader);
     gLoader = nullptr;
@@ -461,20 +464,20 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
   // Check if this is a libgme format
   if (isGmeFormat(path)) {
     LOGD("Detected libgme format: %s", path);
-    
+
     gme_err_t err = gme_open_file(path, &gGmePlayer, gSampleRate);
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (err) {
       LOGE("gme_open_file failed: %s", err);
       gGmePlayer = nullptr;
       return JNI_FALSE;
     }
-    
+
     gPlayerType = PlayerType::LIBGME;
     gGmeTrackCount = gme_track_count(gGmePlayer);
     gGmeTrackIndex = 0;
-    
+
     // Start first track
     err = gme_start_track(gGmePlayer, 0);
     if (err) {
@@ -484,55 +487,57 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       gPlayerType = PlayerType::NONE;
       return JNI_FALSE;
     }
-    
+
     // Apply endless loop settings after starting track
     // For SPC files, this enables true seamless infinite looping
     if (gEndlessLoopMode) {
-      gme_set_fade_msecs(gGmePlayer, -1, 0);  // -1 = disable fade entirely
-      gme_ignore_silence(gGmePlayer, 1);       // disable silence-based end detection
+      gme_set_fade_msecs(gGmePlayer, -1, 0); // -1 = disable fade entirely
+      gme_ignore_silence(gGmePlayer, 1); // disable silence-based end detection
     }
-    
-    LOGD("nOpen: libgme success, %d tracks, sampleRate=%u", gGmeTrackCount, gSampleRate);
+
+    LOGD("nOpen: libgme success, %d tracks, sampleRate=%u", gGmeTrackCount,
+         gSampleRate);
     return JNI_TRUE;
   }
 
   // Check if this is a PSF/PSF1 format for libpsf
   if (isPsfFormat(path)) {
     LOGD("Detected PSF format: %s", path);
-    
-    gPsfInfo = sexy_load(const_cast<char*>(path));
+
+    gPsfInfo = sexy_load(const_cast<char *>(path));
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (!gPsfInfo) {
       LOGE("sexy_load failed");
       return JNI_FALSE;
     }
-    
+
     // Start asynchronous generation in background thread to avoid blocking UI
     int gen = gPsfCurrentGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
     {
-        std::lock_guard<std::mutex> lock(gPsfStateMutex);
-        gPsfAudioCachePtr = std::make_shared<std::vector<uint8_t>>();
-        gPsfPlaybackPos = 0;
-        gPsfCacheReady.store(false, std::memory_order_relaxed);
-        gPsfGenerationComplete.store(false, std::memory_order_relaxed);
+      std::lock_guard<std::mutex> lock(gPsfStateMutex);
+      gPsfAudioCachePtr = std::make_shared<std::vector<uint8_t>>();
+      gPsfPlaybackPos = 0;
+      gPsfCacheReady.store(false, std::memory_order_relaxed);
+      gPsfGenerationComplete.store(false, std::memory_order_relaxed);
     }
-    
+
     std::thread t([gen]() {
-        // Run emulation - this blocks until the track finishes
-        // Check periodically if generation should be cancelled
-        sexy_execute();
-        // Under lock, mark generation complete if still current
-        {
-            std::lock_guard<std::mutex> lock(gPsfStateMutex);
-            if (gPsfCurrentGeneration.load(std::memory_order_relaxed) == gen) {
-                gPsfGenerationComplete.store(true, std::memory_order_release);
-                LOGD("PSF generation complete, total %zu bytes", gPsfAudioCachePtr ? gPsfAudioCachePtr->size() : 0);
-            }
+      // Run emulation - this blocks until the track finishes
+      // Check periodically if generation should be cancelled
+      sexy_execute();
+      // Under lock, mark generation complete if still current
+      {
+        std::lock_guard<std::mutex> lock(gPsfStateMutex);
+        if (gPsfCurrentGeneration.load(std::memory_order_relaxed) == gen) {
+          gPsfGenerationComplete.store(true, std::memory_order_release);
+          LOGD("PSF generation complete, total %zu bytes",
+               gPsfAudioCachePtr ? gPsfAudioCachePtr->size() : 0);
         }
+      }
     });
     gPsfGenerationThread = std::move(t);
-    
+
     gPlayerType = PlayerType::LIBPSF;
     return JNI_TRUE;
   }
@@ -540,21 +545,21 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
   // Check if this is a KSS format for libkss
   if (isKssFormat(path)) {
     LOGD("Detected KSS format: %s", path);
-    
+
     // Read the entire file into memory for libkss
     FILE *f = fopen(path, "rb");
-    
+
     if (!f) {
       LOGE("Failed to open KSS file: %s", path);
       env->ReleaseStringUTFChars(jpath, path);
       return JNI_FALSE;
     }
-    
+
     fseek(f, 0, SEEK_END);
     long fileSize = ftell(f);
     fseek(f, 0, SEEK_SET);
     LOGD("KSS file size: %ld bytes", fileSize);
-    
+
     std::vector<uint8_t> fileData(fileSize);
     if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
       LOGE("Failed to read KSS file");
@@ -563,18 +568,18 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       return JNI_FALSE;
     }
     fclose(f);
-    
+
     // Get filename for KSS_bin2kss (it uses filename for MBM detection)
     const char *filename = strrchr(path, '/');
     filename = filename ? filename + 1 : path;
-    
+
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     // Log first 16 bytes for debugging
-    LOGD("KSS header: %02X %02X %02X %02X %02X %02X %02X %02X", 
-         fileData[0], fileData[1], fileData[2], fileData[3],
-         fileData[4], fileData[5], fileData[6], fileData[7]);
-    
+    LOGD("KSS header: %02X %02X %02X %02X %02X %02X %02X %02X", fileData[0],
+         fileData[1], fileData[2], fileData[3], fileData[4], fileData[5],
+         fileData[6], fileData[7]);
+
     // Create KSS object using KSS_bin2kss which properly parses the header
     // KSS_bin2kss handles KSCC, KSSX, MGS, BGM, OPX, MPK, MBM formats
     gKss = KSS_bin2kss(fileData.data(), fileSize, filename);
@@ -583,51 +588,54 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       return JNI_FALSE;
     }
     LOGD("KSS_bin2kss success, type=%d, mode=%d", gKss->type, gKss->mode);
-    
+
     // Create KSSPLAY object
-    gKssPlay = KSSPLAY_new(gSampleRate, 2, 16);  // stereo, 16-bit
+    gKssPlay = KSSPLAY_new(gSampleRate, 2, 16); // stereo, 16-bit
     if (!gKssPlay) {
       LOGE("KSSPLAY_new failed");
       KSS_delete(gKss);
       gKss = nullptr;
       return JNI_FALSE;
     }
-    
+
     // Set KSS data to player
     int setDataResult = KSSPLAY_set_data(gKssPlay, gKss);
     LOGD("KSSPLAY_set_data result: %d", setDataResult);
-    
+
     // Get track range
     gKssTrackCount = gKss->trk_max - gKss->trk_min + 1;
-    if (gKssTrackCount < 1) gKssTrackCount = 1;
+    if (gKssTrackCount < 1)
+      gKssTrackCount = 1;
     gKssTrackIndex = gKss->trk_min;
-    
+
     // Reset and start first track
-    KSSPLAY_reset(gKssPlay, gKssTrackIndex, 0);  // track, cpu_speed=0 (auto)
-    
+    KSSPLAY_reset(gKssPlay, gKssTrackIndex, 0); // track, cpu_speed=0 (auto)
+
     gPlayerType = PlayerType::LIBKSS;
-    LOGD("nOpen: libkss success, %d tracks (min=%d, max=%d), sampleRate=%u, fmpac=%d, sn76489=%d", 
-         gKssTrackCount, gKss->trk_min, gKss->trk_max, gSampleRate, gKss->fmpac, gKss->sn76489);
+    LOGD("nOpen: libkss success, %d tracks (min=%d, max=%d), sampleRate=%u, "
+         "fmpac=%d, sn76489=%d",
+         gKssTrackCount, gKss->trk_min, gKss->trk_max, gSampleRate, gKss->fmpac,
+         gKss->sn76489);
     return JNI_TRUE;
   }
 
   // Check if this is a tracker format for libopenmpt
   if (isOpenmptFormat(path)) {
     LOGD("Detected tracker format: %s", path);
-    
+
     // Read the entire file into memory for libopenmpt
     FILE *f = fopen(path, "rb");
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (!f) {
       LOGE("Failed to open tracker file");
       return JNI_FALSE;
     }
-    
+
     fseek(f, 0, SEEK_END);
     long fileSize = ftell(f);
     fseek(f, 0, SEEK_SET);
-    
+
     std::vector<char> fileData(fileSize);
     if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
       LOGE("Failed to read tracker file");
@@ -635,21 +643,19 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       return JNI_FALSE;
     }
     fclose(f);
-    
+
     gOpenmptModule = openmpt_module_create_from_memory2(
-        fileData.data(), fileSize,
-        openmpt_log_func_silent, nullptr,
-        openmpt_error_func_ignore, nullptr,
-        nullptr, nullptr, nullptr);
-    
+        fileData.data(), fileSize, openmpt_log_func_silent, nullptr,
+        openmpt_error_func_ignore, nullptr, nullptr, nullptr, nullptr);
+
     if (!gOpenmptModule) {
       LOGE("openmpt_module_create_from_memory2 failed");
       return JNI_FALSE;
     }
-    
+
     // Sample rate is set during creation, no need to set it separately
     // libopenmpt uses the sample rate passed to the read functions
-    
+
     gPlayerType = PlayerType::LIBOPENMPT;
     LOGD("nOpen: libopenmpt success, sampleRate=%u", gSampleRate);
     return JNI_TRUE;
@@ -658,7 +664,7 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
   // Check if this is a MIDI format for libADLMIDI
   if (isMidiFormat(path)) {
     LOGD("Detected MIDI format: %s", path);
-    
+
     // Initialize ADLMIDI with sample rate
     gAdlPlayer = adl_init(gSampleRate);
     if (!gAdlPlayer) {
@@ -666,49 +672,50 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       env->ReleaseStringUTFChars(jpath, path);
       return JNI_FALSE;
     }
-    
+
     // Set OPL3 emulator (more accurate than OPL2)
-    adl_setNumChips(gAdlPlayer, 2);  // Use 2 OPL3 chips for better polyphony
-    adl_setBank(gAdlPlayer, 14);     // Bank 14 = DMX (Bobby Prince v2) - Doom bank!
-    adl_setSoftPanEnabled(gAdlPlayer, 1);  // Enable stereo panning
-    
+    adl_setNumChips(gAdlPlayer, 2); // Use 2 OPL3 chips for better polyphony
+    adl_setBank(gAdlPlayer, 14); // Bank 14 = DMX (Bobby Prince v2) - Doom bank!
+    adl_setSoftPanEnabled(gAdlPlayer, 1); // Enable stereo panning
+
     // Open the MIDI file
     int result = adl_openFile(gAdlPlayer, path);
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (result != 0) {
       LOGE("adl_openFile failed: %s", adl_errorInfo(gAdlPlayer));
       adl_close(gAdlPlayer);
       gAdlPlayer = nullptr;
       return JNI_FALSE;
     }
-    
+
     gPlayerType = PlayerType::LIBADLMIDI;
-    LOGD("nOpen: libADLMIDI success, sampleRate=%u, bank=58 (DMXOP2)", gSampleRate);
+    LOGD("nOpen: libADLMIDI success, sampleRate=%u, bank=58 (DMXOP2)",
+         gSampleRate);
     return JNI_TRUE;
   }
 
   // Check if this is a MUS format for libMusDoom
   if (isMusFormat(path)) {
     LOGD("Detected MUS format: %s", path);
-    
+
     // Save path before releasing - needed for GENMIDI lookup
     std::string musFilePath = path;
-    
+
     // Read the entire file into memory for libMusDoom
     FILE *f = fopen(path, "rb");
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (!f) {
       LOGE("Failed to open MUS file: %s", musFilePath.c_str());
       return JNI_FALSE;
     }
-    
+
     fseek(f, 0, SEEK_END);
     long fileSize = ftell(f);
     fseek(f, 0, SEEK_SET);
     LOGD("MUS file size: %ld bytes", fileSize);
-    
+
     gMusDoomData.resize(fileSize);
     if (fread(gMusDoomData.data(), 1, fileSize, f) != (size_t)fileSize) {
       LOGE("Failed to read MUS file");
@@ -717,12 +724,12 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       return JNI_FALSE;
     }
     fclose(f);
-    
+
     // Log first 16 bytes for debugging (MUS header starts with "MUS\x1a")
-    LOGD("MUS header: %02X %02X %02X %02X %02X %02X %02X %02X", 
-         gMusDoomData[0], gMusDoomData[1], gMusDoomData[2], gMusDoomData[3],
-         gMusDoomData[4], gMusDoomData[5], gMusDoomData[6], gMusDoomData[7]);
-    
+    LOGD("MUS header: %02X %02X %02X %02X %02X %02X %02X %02X", gMusDoomData[0],
+         gMusDoomData[1], gMusDoomData[2], gMusDoomData[3], gMusDoomData[4],
+         gMusDoomData[5], gMusDoomData[6], gMusDoomData[7]);
+
     // Convert MUS -> MIDI in memory (avoids libMusDoom playback hangs).
     MEMFILE *musIn = mem_fopen_read(gMusDoomData.data(), gMusDoomData.size());
     MEMFILE *midiOut = mem_fopen_write();
@@ -754,10 +761,11 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       return JNI_FALSE;
     }
     adl_setNumChips(gAdlPlayer, 2);
-    adl_setBank(gAdlPlayer, 14);    // DMX bank
+    adl_setBank(gAdlPlayer, 14); // DMX bank
     adl_setSoftPanEnabled(gAdlPlayer, 1);
 
-    int result = adl_openData(gAdlPlayer, gMusDoomMidiData.data(), (unsigned long)gMusDoomMidiData.size());
+    int result = adl_openData(gAdlPlayer, gMusDoomMidiData.data(),
+                              (unsigned long)gMusDoomMidiData.size());
     if (result != 0) {
       LOGE("adl_openData (MUS->MIDI) failed: %s", adl_errorInfo(gAdlPlayer));
       adl_close(gAdlPlayer);
@@ -851,7 +859,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
   if (gEndlessLoopMode) {
     return JNI_FALSE;
   }
-  
+
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     return (gVgmPlayer->GetState() & PLAYSTATE_END) ? JNI_TRUE : JNI_FALSE;
   }
@@ -861,7 +869,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
   if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
     // Tracker modules loop forever by default - check if we've reached end
     // openmpt doesn't have a built-in "ended" check, so we rely on position
-    return JNI_FALSE;  // Tracker files typically loop forever
+    return JNI_FALSE; // Tracker files typically loop forever
   }
   if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
     // KSS files can detect stop via KSSPLAY_get_stop_flag
@@ -878,8 +886,10 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
   }
   if (gPlayerType == PlayerType::LIBPSF) {
     std::lock_guard<std::mutex> lock(gPsfStateMutex);
-    if (!gPsfCacheReady.load(std::memory_order_acquire)) return JNI_FALSE; // still generating initial buffer
-    if (!gPsfGenerationComplete.load(std::memory_order_acquire)) return JNI_FALSE; // generating but buffer ready, not ended yet
+    if (!gPsfCacheReady.load(std::memory_order_acquire))
+      return JNI_FALSE; // still generating initial buffer
+    if (!gPsfGenerationComplete.load(std::memory_order_acquire))
+      return JNI_FALSE; // generating but buffer ready, not ended yet
     size_t cacheSize = gPsfAudioCachePtr ? gPsfAudioCachePtr->size() : 0;
     size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
     return (currentPos >= cacheSize) ? JNI_TRUE : JNI_FALSE;
@@ -893,8 +903,10 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
 }
 
 JNIEXPORT jboolean JNICALL
-Java_org_vlessert_vgmp_engine_VgmEngine_nIsPsfCacheReady(JNIEnv *env, jclass cls) {
-  if (gPlayerType != PlayerType::LIBPSF) return JNI_TRUE;
+Java_org_vlessert_vgmp_engine_VgmEngine_nIsPsfCacheReady(JNIEnv *env,
+                                                         jclass cls) {
+  if (gPlayerType != PlayerType::LIBPSF)
+    return JNI_TRUE;
   return gPsfCacheReady.load(std::memory_order_acquire) ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -905,14 +917,17 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetBassEnabled(
   LOGD("Bass enabled: %d", gBassEnabled);
 }
 
-JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetBassEnabled(
-    JNIEnv *env, jclass cls) {
+JNIEXPORT jboolean JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetBassEnabled(JNIEnv *env,
+                                                        jclass cls) {
   return gBassEnabled ? JNI_TRUE : JNI_FALSE;
 }
 
 // Reverb control
-JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetReverbEnabled(
-    JNIEnv *env, jclass cls, jboolean enabled) {
+JNIEXPORT void JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nSetReverbEnabled(JNIEnv *env,
+                                                          jclass cls,
+                                                          jboolean enabled) {
   gReverbEnabled = (enabled == JNI_TRUE);
   if (!gReverbEnabled) {
     // Clear reverb buffer when disabled
@@ -922,20 +937,21 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetReverbEnabled
   LOGD("Reverb enabled: %d", gReverbEnabled);
 }
 
-JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetReverbEnabled(
-    JNIEnv *env, jclass cls) {
+JNIEXPORT jboolean JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetReverbEnabled(JNIEnv *env,
+                                                          jclass cls) {
   return gReverbEnabled ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetEndlessLoop(
     JNIEnv *env, jclass cls, jboolean enabled) {
   gEndlessLoopMode = (enabled == JNI_TRUE);
-  
+
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     if (gEndlessLoopMode) {
       // For SPC files, enable true seamless infinite looping:
-      gme_set_fade_msecs(gGmePlayer, -1, 0);  // -1 = disable fade entirely
-      gme_ignore_silence(gGmePlayer, 1);       // disable silence-based end detection
+      gme_set_fade_msecs(gGmePlayer, -1, 0); // -1 = disable fade entirely
+      gme_ignore_silence(gGmePlayer, 1); // disable silence-based end detection
     } else {
       // Restore normal behavior
       gme_set_fade_msecs(gGmePlayer, 0, 8000); // normal fade
@@ -945,21 +961,25 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetEndlessLoop(
     // automatically fading out based on their embedded track length metadata
     gme_set_autoload_playback_limit(gGmePlayer, enabled ? 0 : 1);
   }
-  // For VGM, the endless loop is handled by the gEndlessLoopMode flag in nIsEnded
+  // For VGM, the endless loop is handled by the gEndlessLoopMode flag in
+  // nIsEnded
 }
 
-JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetEndlessLoop(
-    JNIEnv *env, jclass cls) {
+JNIEXPORT jboolean JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetEndlessLoop(JNIEnv *env,
+                                                        jclass cls) {
   return gEndlessLoopMode ? JNI_TRUE : JNI_FALSE;
 }
 
 // Playback speed control (0.25 to 1.0 for 25% to 100%)
 static double gPlaybackSpeed = 1.0;
 
-JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetPlaybackSpeed(
-    JNIEnv *env, jclass cls, jdouble speed) {
+JNIEXPORT void JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nSetPlaybackSpeed(JNIEnv *env,
+                                                          jclass cls,
+                                                          jdouble speed) {
   gPlaybackSpeed = speed;
-  
+
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     gVgmPlayer->SetPlaybackSpeed(speed);
   }
@@ -974,8 +994,9 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetPlaybackSpeed
   // libopenmpt doesn't have a direct speed control API
 }
 
-JNIEXPORT jdouble JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetPlaybackSpeed(
-    JNIEnv *env, jclass cls) {
+JNIEXPORT jdouble JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetPlaybackSpeed(JNIEnv *env,
+                                                          jclass cls) {
   return gPlaybackSpeed;
 }
 
@@ -992,17 +1013,17 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
       int length_ms = info->play_length;
       int intro_ms = info->intro_length;
       int loop_ms = info->loop_length;
-      
+
       // Use intro + 2 loops for better estimate if available
       if (intro_ms > 0 && loop_ms > 0) {
         length_ms = intro_ms + loop_ms * 2;
       }
-      
+
       // If length is unreasonably short (< 30 seconds), default to 3 minutes
       if (length_ms < 30000) {
         length_ms = 180000;
       }
-      
+
       gme_free_info(info);
       // Cast to jlong BEFORE multiplication to avoid integer overflow
       return (jlong)length_ms * gSampleRate / 1000;
@@ -1018,7 +1039,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
     // Check if current track has info
     if (gKss->info && gKss->info_num > 0) {
       for (uint16_t i = 0; i < gKss->info_num; i++) {
-        if (gKss->info[i].song == gKssTrackIndex && gKss->info[i].time_in_ms > 0) {
+        if (gKss->info[i].song == gKssTrackIndex &&
+            gKss->info[i].time_in_ms > 0) {
           return (jlong)gKss->info[i].time_in_ms * gSampleRate / 1000;
         }
       }
@@ -1112,7 +1134,8 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
     if (gPsfAudioCachePtr) {
       // Clamp to available data (cannot seek beyond generated buffer)
       size_t maxBytes = gPsfAudioCachePtr->size();
-      if (targetBytes > maxBytes) targetBytes = maxBytes;
+      if (targetBytes > maxBytes)
+        targetBytes = maxBytes;
       gPsfPlaybackPos.store(targetBytes, std::memory_order_relaxed);
     }
   }
@@ -1123,14 +1146,15 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
     if (gVgmPlayer) {
       // We track position manually for KSS since there's no getter
     }
-    
+
     // For KSS, we need to reset and fast-forward to the target position
     // This is expensive but the only way to seek in KSS
-    LOGD("KSS seek to %lld samples (reset and fast-forward)", (long long)samplePos);
-    
+    LOGD("KSS seek to %lld samples (reset and fast-forward)",
+         (long long)samplePos);
+
     // Reset to current track
     KSSPLAY_reset(gKssPlay, gKssTrackIndex, 0);
-    
+
     // Fast-forward silently to the target position
     // Use large chunks for efficiency
     const int CHUNK_SIZE = 4096;
@@ -1178,10 +1202,14 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       for (jint i = 0; i < (jint)got; i++) {
         INT32 l = buf[i].L >> 8;
         INT32 r = buf[i].R >> 8;
-        if (l > 32767) l = 32767;
-        if (l < -32768) l = -32768;
-        if (r > 32767) r = 32767;
-        if (r < -32768) r = -32768;
+        if (l > 32767)
+          l = 32767;
+        if (l < -32768)
+          l = -32768;
+        if (r > 32767)
+          r = 32767;
+        if (r < -32768)
+          r = -32768;
         dst[(written + i) * 2] = (jshort)l;
         dst[(written + i) * 2 + 1] = (jshort)r;
 
@@ -1198,21 +1226,24 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       LOGE("gme_play error: %s", err);
     } else {
       written = frames;
-      
+
       // Feed mono samples to FFT ring buffer
       for (jint i = 0; i < written; i++) {
-        float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+        float sample =
+            (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
         gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
         gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
       }
     }
   } else if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
     // libopenmpt outputs stereo interleaved
-    written = (jint)openmpt_module_read_interleaved_stereo(gOpenmptModule, gSampleRate, frames, dst);
-    
+    written = (jint)openmpt_module_read_interleaved_stereo(
+        gOpenmptModule, gSampleRate, frames, dst);
+
     // Feed mono samples to FFT ring buffer
     for (jint i = 0; i < written; i++) {
-      float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+      float sample =
+          (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
       gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
       gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
     }
@@ -1220,17 +1251,18 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
     // libkss outputs stereo interleaved 16-bit
     KSSPLAY_calc(gKssPlay, dst, frames);
     written = frames;
-    
+
     // Debug: log first few samples occasionally
     static int kssLogCounter = 0;
     if (kssLogCounter++ % 500 == 0) {
-      LOGD("KSS samples: L=%d R=%d, stop_flag=%d", 
-           dst[0], dst[1], KSSPLAY_get_stop_flag(gKssPlay));
+      LOGD("KSS samples: L=%d R=%d, stop_flag=%d", dst[0], dst[1],
+           KSSPLAY_get_stop_flag(gKssPlay));
     }
-    
+
     // Feed mono samples to FFT ring buffer
     for (jint i = 0; i < written; i++) {
-      float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+      float sample =
+          (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
       gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
       gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
     }
@@ -1239,11 +1271,12 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
     // adl_play returns number of samples rendered (stereo pairs)
     int samplesRendered = adl_play(gAdlPlayer, frames * 2, dst);
     if (samplesRendered > 0) {
-      written = samplesRendered / 2;  // Convert sample count to frame count
-      
+      written = samplesRendered / 2; // Convert sample count to frame count
+
       // Feed mono samples to FFT ring buffer
       for (jint i = 0; i < written; i++) {
-        float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+        float sample =
+            (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
         gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
         gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
       }
@@ -1251,47 +1284,60 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
   } else if (gPlayerType == PlayerType::LIBPSF) {
     // Stream from pre-generated cache - hold lock during entire read to prevent
     // the generation thread from reallocating the vector while we're reading
+    static int psfZeroLogCounter = 0;
     {
-        std::lock_guard<std::mutex> lock(gPsfStateMutex);
-        if (!gPsfAudioCachePtr || gPsfAudioCachePtr->empty()) {
+      std::lock_guard<std::mutex> lock(gPsfStateMutex);
+      if (!gPsfAudioCachePtr || gPsfAudioCachePtr->empty()) {
+        if (psfZeroLogCounter++ % 100 == 0) {
+          LOGD("PSF buffer empty or null");
+        }
+        written = 0;
+      } else {
+        size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
+        if ((gPsfAudioCachePtr->size() - currentPos) < 4) {
+          if (psfZeroLogCounter++ % 100 == 0) {
+            LOGD("PSF buffer underrun: size=%zu, pos=%zu",
+                 gPsfAudioCachePtr->size(), currentPos);
+          }
           written = 0;
         } else {
-          size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
-          if ((gPsfAudioCachePtr->size() - currentPos) < 4) {
-            written = 0;
-          } else {
-            size_t bytesRemaining = gPsfAudioCachePtr->size() - currentPos;
-            size_t framesAvailable = bytesRemaining / 4;
-            jint framesToCopy = (framesAvailable >= (size_t)frames) ? frames : (jint)framesAvailable;
-            if (framesToCopy > 0) {
-              const uint8_t* src = gPsfAudioCachePtr->data() + currentPos;
-              for (jint i = 0; i < framesToCopy; i++) {
-                int16_t l = *reinterpret_cast<const int16_t*>(src + i * 4);
-                int16_t r = *reinterpret_cast<const int16_t*>(src + i * 4 + 2);
-                dst[i * 2] = l;
-                dst[i * 2 + 1] = r;
-                
-                // Feed to FFT ring buffer (mono mix)
-                float sample = (float)l / 32768.0f + (float)r / 32768.0f;
-                gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-                gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
-              }
-              gPsfPlaybackPos.store(currentPos + framesToCopy * 4, std::memory_order_relaxed);
-              written = framesToCopy;
+          size_t bytesRemaining = gPsfAudioCachePtr->size() - currentPos;
+          size_t framesAvailable = bytesRemaining / 4;
+          jint framesToCopy = (framesAvailable >= (size_t)frames)
+                                  ? frames
+                                  : (jint)framesAvailable;
+          if (framesToCopy > 0) {
+            const uint8_t *src = gPsfAudioCachePtr->data() + currentPos;
+            for (jint i = 0; i < framesToCopy; i++) {
+              int16_t l = *reinterpret_cast<const int16_t *>(src + i * 4);
+              int16_t r = *reinterpret_cast<const int16_t *>(src + i * 4 + 2);
+              dst[i * 2] = l;
+              dst[i * 2 + 1] = r;
+
+              // Feed to FFT ring buffer (mono mix)
+              float sample = (float)l / 32768.0f + (float)r / 32768.0f;
+              gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
+              gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
             }
+            gPsfPlaybackPos.store(currentPos + framesToCopy * 4,
+                                  std::memory_order_relaxed);
+            written = framesToCopy;
           }
         }
+      }
     }
   } else if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     // libMusDoom outputs stereo interleaved 16-bit
     // musdoom_generate_samples returns number of stereo samples generated
-    size_t samplesGenerated = musdoom_generate_samples(gMusDoomPlayer, dst, frames);
+    size_t samplesGenerated =
+        musdoom_generate_samples(gMusDoomPlayer, dst, frames);
     if (samplesGenerated > 0) {
       written = (jint)samplesGenerated;
-      
+
       // Feed mono samples to FFT ring buffer
       for (jint i = 0; i < written; i++) {
-        float sample = (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
+        float sample =
+            (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
         gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
         gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
       }
@@ -1323,7 +1369,9 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       // Apply reverb (simple delay-based reverb)
       if (gReverbEnabled) {
         // Read delayed samples
-        int delayPos = (gReverbWritePos - REVERB_DELAY_SAMPLES + REVERB_DELAY_SAMPLES * 2) % (REVERB_DELAY_SAMPLES * 2);
+        int delayPos = (gReverbWritePos - REVERB_DELAY_SAMPLES +
+                        REVERB_DELAY_SAMPLES * 2) %
+                       (REVERB_DELAY_SAMPLES * 2);
         float delayedL = gReverbBuffer[delayPos];
         float delayedR = gReverbBuffer[delayPos + 1];
 
@@ -1339,10 +1387,14 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       }
 
       // Clamp and convert back to int16
-      if (l > 1.0f) l = 1.0f;
-      if (l < -1.0f) l = -1.0f;
-      if (r > 1.0f) r = 1.0f;
-      if (r < -1.0f) r = -1.0f;
+      if (l > 1.0f)
+        l = 1.0f;
+      if (l < -1.0f)
+        l = -1.0f;
+      if (r > 1.0f)
+        r = 1.0f;
+      if (r < -1.0f)
+        r = -1.0f;
       dst[i * 2] = (jshort)(l * 32767.0f);
       dst[i * 2 + 1] = (jshort)(r * 32767.0f);
     }
@@ -1353,7 +1405,8 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
   // Occasional logging to avoid flooding
   static int logCounter = 0;
   if (logCounter++ % 100 == 0) {
-    LOGD("nFillBuffer: wrote %d frames, playerType=%d", written, (int)gPlayerType);
+    LOGD("nFillBuffer: wrote %d frames, playerType=%d", written,
+         (int)gPlayerType);
   }
 
   return written;
@@ -1370,7 +1423,8 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
 
   for (int i = 0; i < n; i++) {
     float multiplier =
-        0.5f * (1.0f - std::cos(2.0f * 3.14159265f * (float)i / (float)(n - 1)));
+        0.5f *
+        (1.0f - std::cos(2.0f * 3.14159265f * (float)i / (float)(n - 1)));
     a[i] *= multiplier;
   }
 
@@ -1403,17 +1457,18 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
  * Simple implementation for Android where iconv is not available.
  * Handles BMP characters (U+0000 to U+FFFF).
  */
-static std::string utf16le_to_utf8(const UINT8* data, size_t byteLen) {
+static std::string utf16le_to_utf8(const UINT8 *data, size_t byteLen) {
   std::string result;
-  const UINT8* ptr = data;
-  const UINT8* end = data + byteLen;
-  
+  const UINT8 *ptr = data;
+  const UINT8 *end = data + byteLen;
+
   while (ptr + 1 < end) {
-    UINT16 codeUnit = ptr[0] | (ptr[1] << 8);  // UTF-16LE
+    UINT16 codeUnit = ptr[0] | (ptr[1] << 8); // UTF-16LE
     ptr += 2;
-    
-    if (codeUnit == 0) break;  // null terminator
-    
+
+    if (codeUnit == 0)
+      break; // null terminator
+
     if (codeUnit < 0x80) {
       // 1-byte UTF-8
       result += (char)codeUnit;
@@ -1428,34 +1483,36 @@ static std::string utf16le_to_utf8(const UINT8* data, size_t byteLen) {
       result += (char)(0x80 | (codeUnit & 0x3F));
     }
   }
-  
+
   return result;
 }
 
 /**
  * Read GD3 tags directly from VGM file data.
- * This bypasses libvgm's GetTags() which relies on iconv (not available on Android).
- * Returns a string in the format: "KEY1|||VALUE1|||KEY2|||VALUE2|||..."
+ * This bypasses libvgm's GetTags() which relies on iconv (not available on
+ * Android). Returns a string in the format:
+ * "KEY1|||VALUE1|||KEY2|||VALUE2|||..."
  */
-static std::string readVgmGd3Tags(const UINT8* fileData, const VGM_HEADER* hdr) {
+static std::string readVgmGd3Tags(const UINT8 *fileData,
+                                  const VGM_HEADER *hdr) {
   if (!hdr->gd3Ofs || hdr->gd3Ofs >= hdr->eofOfs) {
     return "";
   }
-  
+
   // Check GD3 magic "Gd3 "
   if (memcmp(&fileData[hdr->gd3Ofs], "Gd3 ", 4) != 0) {
     return "";
   }
-  
+
   // GD3 structure: "Gd3 " (4) + version (4) + data size (4) + data
-  UINT32 dataSize = *(UINT32*)(&fileData[hdr->gd3Ofs + 8]);
+  UINT32 dataSize = *(UINT32 *)(&fileData[hdr->gd3Ofs + 8]);
   UINT32 dataStart = hdr->gd3Ofs + 12;
   UINT32 dataEnd = dataStart + dataSize;
-  
+
   if (dataEnd > hdr->eofOfs) {
     dataEnd = hdr->eofOfs;
   }
-  
+
   // GD3 tag order (all UTF-16LE, null-terminated):
   // 0: Track title (English)
   // 1: Track title (Japanese)
@@ -1468,35 +1525,35 @@ static std::string readVgmGd3Tags(const UINT8* fileData, const VGM_HEADER* hdr) 
   // 8: Release date
   // 9: VGM creator (dumper)
   // 10: Notes
-  
-  const char* tagKeys[] = {
-    "TITLE", "TITLE-JPN", "GAME", "GAME-JPN", "SYSTEM", "SYSTEM-JPN",
-    "ARTIST", "ARTIST-JPN", "DATE", "ENCODED_BY", "COMMENT"
-  };
+
+  const char *tagKeys[] = {"TITLE",  "TITLE-JPN",  "GAME",   "GAME-JPN",
+                           "SYSTEM", "SYSTEM-JPN", "ARTIST", "ARTIST-JPN",
+                           "DATE",   "ENCODED_BY", "COMMENT"};
   const int tagCount = 11;
-  
+
   std::string result;
   UINT32 pos = dataStart;
-  
+
   for (int i = 0; i < tagCount && pos < dataEnd; i++) {
     // Find null terminator for this string
     UINT32 start = pos;
     while (pos + 1 < dataEnd) {
       UINT16 ch = fileData[pos] | (fileData[pos + 1] << 8);
       pos += 2;
-      if (ch == 0) break;
+      if (ch == 0)
+        break;
     }
-    
+
     // Convert UTF-16LE to UTF-8
     std::string value = utf16le_to_utf8(&fileData[start], pos - start - 2);
-    
+
     // Add to result
     result += tagKeys[i];
     result += "|||";
     result += value;
     result += "|||";
   }
-  
+
   return result;
 }
 
@@ -1508,167 +1565,174 @@ JNIEXPORT jstring JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     // Read GD3 tags directly from file data to bypass iconv dependency
-    const VGM_HEADER* hdr = gVgmPlayer->GetFileHeader();
-    UINT8* fileData = DataLoader_GetData(gLoader);
-    
+    const VGM_HEADER *hdr = gVgmPlayer->GetFileHeader();
+    UINT8 *fileData = DataLoader_GetData(gLoader);
+
     if (hdr && fileData) {
       std::string tags = readVgmGd3Tags(fileData, hdr);
       return env->NewStringUTF(tags.c_str());
     }
     return env->NewStringUTF("");
   }
-  
+
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     gme_info_t *info;
     if (gme_track_info(gGmePlayer, &info, gGmeTrackIndex) != 0) {
       return env->NewStringUTF("");
     }
-    
+
     // Build tags string in similar format to VGM
     std::string s;
-    
+
     // TITLE
     s += "TITLE";
     s += "|||";
     s += info->song ? info->song : "";
     s += "|||";
-    
+
     // TITLE-JPN (not available in gme)
     s += "TITLE-JPN";
     s += "|||";
     s += "|||";
-    
+
     // GAME
     s += "GAME";
     s += "|||";
     s += info->game ? info->game : "";
     s += "|||";
-    
+
     // GAME-JPN
     s += "GAME-JPN";
     s += "|||";
     s += "|||";
-    
+
     // SYSTEM
     s += "SYSTEM";
     s += "|||";
     s += info->system ? info->system : "";
     s += "|||";
-    
+
     // SYSTEM-JPN
     s += "SYSTEM-JPN";
     s += "|||";
     s += "|||";
-    
+
     // ARTIST
     s += "ARTIST";
     s += "|||";
     s += info->author ? info->author : "";
     s += "|||";
-    
+
     // ARTIST-JPN
     s += "ARTIST-JPN";
     s += "|||";
     s += "|||";
-    
+
     // DATE
     s += "DATE";
     s += "|||";
     s += info->copyright ? info->copyright : "";
     s += "|||";
-    
+
     // ENCODED_BY (dumper)
     s += "ENCODED_BY";
     s += "|||";
     s += info->dumper ? info->dumper : "";
     s += "|||";
-    
+
     // COMMENT
     s += "COMMENT";
     s += "|||";
     s += info->comment ? info->comment : "";
     s += "|||";
-    
+
     gme_free_info(info);
     return env->NewStringUTF(s.c_str());
   }
-  
+
   // Handle tracker formats via libopenmpt
   if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
     std::string s;
-    
+
     // TITLE
     s += "TITLE";
     s += "|||";
     const char *title = openmpt_module_get_metadata(gOpenmptModule, "title");
     s += title ? title : "";
     s += "|||";
-    if (title) openmpt_free_string(title);
-    
+    if (title)
+      openmpt_free_string(title);
+
     // GAME (use message or tracker)
     s += "GAME";
     s += "|||";
-    const char *message = openmpt_module_get_metadata(gOpenmptModule, "message");
+    const char *message =
+        openmpt_module_get_metadata(gOpenmptModule, "message");
     s += message ? message : "";
     s += "|||";
-    if (message) openmpt_free_string(message);
-    
+    if (message)
+      openmpt_free_string(message);
+
     // GAME-JPN
     s += "GAME-JPN";
     s += "|||";
     s += "|||";
-    
+
     // SYSTEM (tracker type)
     s += "SYSTEM";
     s += "|||";
-    const char *tracker = openmpt_module_get_metadata(gOpenmptModule, "tracker");
+    const char *tracker =
+        openmpt_module_get_metadata(gOpenmptModule, "tracker");
     s += tracker ? tracker : "Tracker";
     s += "|||";
-    if (tracker) openmpt_free_string(tracker);
-    
+    if (tracker)
+      openmpt_free_string(tracker);
+
     // SYSTEM-JPN
     s += "SYSTEM-JPN";
     s += "|||";
     s += "|||";
-    
+
     // ARTIST
     s += "ARTIST";
     s += "|||";
     const char *artist = openmpt_module_get_metadata(gOpenmptModule, "artist");
     s += artist ? artist : "";
     s += "|||";
-    if (artist) openmpt_free_string(artist);
-    
+    if (artist)
+      openmpt_free_string(artist);
+
     // ARTIST-JPN
     s += "ARTIST-JPN";
     s += "|||";
     s += "|||";
-    
+
     // DATE
     s += "DATE";
     s += "|||";
     const char *date = openmpt_module_get_metadata(gOpenmptModule, "date");
     s += date ? date : "";
     s += "|||";
-    if (date) openmpt_free_string(date);
-    
+    if (date)
+      openmpt_free_string(date);
+
     // ENCODED_BY
     s += "ENCODED_BY";
     s += "|||";
     s += "|||";
-    
+
     // COMMENT
     s += "COMMENT";
     s += "|||";
     s += "|||";
-    
+
     return env->NewStringUTF(s.c_str());
   }
-  
+
   // Handle KSS format via libkss
   if (gPlayerType == PlayerType::LIBKSS && gKss) {
     std::string s;
-    
+
     // TITLE - get from KSS title or track info
     s += "TITLE";
     s += "|||";
@@ -1685,23 +1749,23 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
       }
     }
     s += "|||";
-    
+
     // TITLE-JPN
     s += "TITLE-JPN";
     s += "|||";
     s += "|||";
-    
+
     // GAME - use KSS title as game name
     s += "GAME";
     s += "|||";
     s += kssTitle ? kssTitle : "";
     s += "|||";
-    
+
     // GAME-JPN
     s += "GAME-JPN";
     s += "|||";
     s += "|||";
-    
+
     // SYSTEM - MSX or Sega Master System
     s += "SYSTEM";
     s += "|||";
@@ -1712,43 +1776,43 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     } else if (gKss->mode == 2) {
       s += "Sega Game Gear";
     } else {
-      s += "MSX";  // Default
+      s += "MSX"; // Default
     }
     s += "|||";
-    
+
     // SYSTEM-JPN
     s += "SYSTEM-JPN";
     s += "|||";
     s += "|||";
-    
+
     // ARTIST
     s += "ARTIST";
     s += "|||";
     s += "|||";
-    
+
     // ARTIST-JPN
     s += "ARTIST-JPN";
     s += "|||";
     s += "|||";
-    
+
     // DATE
     s += "DATE";
     s += "|||";
     s += "|||";
-    
+
     // ENCODED_BY
     s += "ENCODED_BY";
     s += "|||";
     s += "|||";
-    
+
     // COMMENT
     s += "COMMENT";
     s += "|||";
     s += "|||";
-    
+
     return env->NewStringUTF(s.c_str());
   }
-  
+
   return env->NewStringUTF("");
 }
 
@@ -1768,37 +1832,37 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
     Music_Emu *tempEmu;
     gme_err_t err = gme_open_file(path, &tempEmu, gSampleRate);
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (err || !tempEmu) {
       return 0;
     }
-    
+
     gme_info_t *info;
     if (gme_track_info(tempEmu, &info, 0) != 0) {
       gme_delete(tempEmu);
       return 0;
     }
-    
+
     // For NSF/SPC files, play_length is often a default or incorrect value
     // intro_length + loop_length gives more accurate estimate if available
     int length_ms = info->play_length;
     int intro_ms = info->intro_length;
     int loop_ms = info->loop_length;
-    
+
     // Use intro + 2 loops for better estimate if available
     if (intro_ms > 0 && loop_ms > 0) {
       length_ms = intro_ms + loop_ms * 2;
     }
-    
+
     // If length is unreasonably short (< 30 seconds), default to 3 minutes
     // SPC and NSF files typically loop and don't have a fixed duration
     if (length_ms < 30000) {
       length_ms = 180000; // 3 minutes default
     }
-    
+
     gme_free_info(info);
     gme_delete(tempEmu);
-    
+
     // Cast to jlong BEFORE multiplication to avoid integer overflow
     return (jlong)length_ms * gSampleRate / 1000;
   }
@@ -1807,16 +1871,16 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
   if (isKssFormat(path)) {
     // Read the entire file into memory for libkss
     FILE *f = fopen(path, "rb");
-    
+
     if (!f) {
       env->ReleaseStringUTFChars(jpath, path);
       return 0;
     }
-    
+
     fseek(f, 0, SEEK_END);
     long fileSize = ftell(f);
     fseek(f, 0, SEEK_SET);
-    
+
     std::vector<uint8_t> fileData(fileSize);
     if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
       fclose(f);
@@ -1824,79 +1888,132 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
       return 0;
     }
     fclose(f);
-    
+
     // Get filename for KSS_bin2kss
     const char *filename = strrchr(path, '/');
     filename = filename ? filename + 1 : path;
-    
+
     // Create KSS object
     KSS *tempKss = KSS_bin2kss(fileData.data(), fileSize, filename);
     if (!tempKss) {
       env->ReleaseStringUTFChars(jpath, path);
       return 0;
     }
-    
+
     // Check if KSS has duration info
     jlong duration = 0;
     if (tempKss->info && tempKss->info_num > 0) {
       // Find the first track's duration
       for (uint16_t i = 0; i < tempKss->info_num; i++) {
-        if (tempKss->info[i].song == tempKss->trk_min && tempKss->info[i].time_in_ms > 0) {
+        if (tempKss->info[i].song == tempKss->trk_min &&
+            tempKss->info[i].time_in_ms > 0) {
           duration = (jlong)tempKss->info[i].time_in_ms * gSampleRate / 1000;
           break;
         }
       }
     }
-    
+
     KSS_delete(tempKss);
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     // Return 0 if no duration info found - let Kotlin use stored duration
     return duration;
+  }
+
+  // Check if this is a MUS format — convert to MIDI in memory, then query
+  // adl_totalTimeLength() which parses MIDI tempo events without rendering
+  // any audio, so this is fast enough to call once per track during import.
+  if (isMusFormat(path)) {
+    FILE *f = fopen(path, "rb");
+    env->ReleaseStringUTFChars(jpath, path);
+    if (!f)
+      return (jlong)180 * gSampleRate;
+
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    std::vector<uint8_t> musData(fileSize);
+    if (fread(musData.data(), 1, fileSize, f) != (size_t)fileSize) {
+      fclose(f);
+      return (jlong)180 * gSampleRate;
+    }
+    fclose(f);
+
+    MEMFILE *musIn = mem_fopen_read(musData.data(), musData.size());
+    MEMFILE *midiOut = mem_fopen_write();
+    bool convertError = mus2mid(musIn, midiOut);
+
+    void *midiBuf = nullptr;
+    size_t midiSize = 0;
+    if (!convertError)
+      mem_get_buf(midiOut, &midiBuf, &midiSize);
+    mem_fclose(musIn);
+    mem_fclose(midiOut);
+
+    if (convertError || !midiBuf || midiSize == 0)
+      return (jlong)180 * gSampleRate;
+
+    ADL_MIDIPlayer *tempPlayer = adl_init(gSampleRate);
+    if (!tempPlayer)
+      return (jlong)180 * gSampleRate;
+
+    adl_setBank(tempPlayer, 14); // DMX bank — same as nOpen()
+    int res = adl_openData(tempPlayer, midiBuf, (unsigned long)midiSize);
+    if (res != 0) {
+      adl_close(tempPlayer);
+      return (jlong)180 * gSampleRate;
+    }
+
+    double totalSeconds = adl_totalTimeLength(tempPlayer);
+    adl_close(tempPlayer);
+
+    if (totalSeconds > 0)
+      return (jlong)(totalSeconds * gSampleRate);
+    return (jlong)180 * gSampleRate;
   }
 
   // Check if this is a MIDI format
   if (isMidiFormat(path)) {
     ADL_MIDIPlayer *tempPlayer = adl_init(gSampleRate);
-    
+
     if (!tempPlayer) {
       env->ReleaseStringUTFChars(jpath, path);
       return (jlong)180 * gSampleRate; // Default 3 minutes
     }
-    
+
     // Set DMX Bobby Prince v2 bank (bank 14) for Doom MIDI files
     adl_setBank(tempPlayer, 14);
-    
+
     // Open the MIDI file
     if (adl_openFile(tempPlayer, path) != 0) {
       adl_close(tempPlayer);
       env->ReleaseStringUTFChars(jpath, path);
       return (jlong)180 * gSampleRate; // Default 3 minutes
     }
-    
+
     // Get total duration
     double totalSeconds = adl_totalTimeLength(tempPlayer);
     adl_close(tempPlayer);
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (totalSeconds > 0) {
       return (jlong)(totalSeconds * gSampleRate);
     }
     return (jlong)180 * gSampleRate; // Default 3 minutes
   }
 
-   // Check if this is a PSF format
-   if (isPsfFormat(path)) {
-     PSFINFO* info = sexy_load(const_cast<char*>(path));
-     env->ReleaseStringUTFChars(jpath, path);
-     if (info) {
-       // PSFINFO.length is in milliseconds, convert to samples
-       jlong length = (jlong)info->length * gSampleRate / 1000;
-       sexy_freepsfinfo(info);
-       return length;
-     }
-     return 0;
-   }
+  // Check if this is a PSF format
+  if (isPsfFormat(path)) {
+    PSFINFO *info = sexy_load(const_cast<char *>(path));
+    env->ReleaseStringUTFChars(jpath, path);
+    if (info) {
+      // PSFINFO.length is in milliseconds, convert to samples
+      jlong length = (jlong)info->length * gSampleRate / 1000;
+      sexy_freepsfinfo(info);
+      return length;
+    }
+    return 0;
+  }
 
   // Use libvgm for VGM/VGZ - VGM files have accurate length from GD3 tags
   DATA_LOADER *locLoader = FileLoader_Init(path);
@@ -1919,7 +2036,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
 
   // VGM files have accurate length from GD3 tags, use directly
   jlong length = (jlong)locPlayer->Tick2Sample(locPlayer->GetTotalTicks());
-  
+
   locPlayer->UnloadFile();
   delete locPlayer;
   DataLoader_Deinit(locLoader);
@@ -1946,8 +2063,9 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetDeviceCount(
       return (jint)ids.size();
     }
   }
-  // libgme doesn't support per-voice volume control, so return 0 to hide sliders
-  // (gme_voice_count returns number of voices/channels, but they can't be controlled)
+  // libgme doesn't support per-voice volume control, so return 0 to hide
+  // sliders (gme_voice_count returns number of voices/channels, but they can't
+  // be controlled)
   return 0;
 }
 
@@ -2008,31 +2126,71 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelCount(
         // Get device options to find channel count from muting mask
         PLR_DEV_OPTS devOpts;
         if (gVgmPlayer->GetDeviceOptions(dev.id, devOpts) <= 0x01) {
-          // Check how many bits are set in chnMute masks (but actually we need to know total channels)
-          // Wait, how does libvgm report channel count? Let's check devDecl
+          // Check how many bits are set in chnMute masks (but actually we need
+          // to know total channels) Wait, how does libvgm report channel count?
+          // Let's check devDecl
           if (dev.devDecl) {
             // For now, let's assume standard channel counts for known chips
             switch (dev.type) {
-              case DEVID_SN76496: totalChannels += 4; break;
-              case DEVID_AY8910: totalChannels += 3; break;
-              case DEVID_YM2413: totalChannels += 9; break;
-              case DEVID_YM2612: totalChannels += 6; break;
-              case DEVID_YM2151: totalChannels += 8; break;
-              case DEVID_VBOY_VSU: totalChannels += 8; break;
-              case DEVID_YM2203: totalChannels += 3; break;
-              case DEVID_YM2608: totalChannels += 12; break;
-              case DEVID_YM2610: totalChannels += 12; break;
-              case DEVID_RF5C68: totalChannels += 8; break;
-              case DEVID_SAA1099: totalChannels += 6; break;
-              case DEVID_32X_PWM: totalChannels += 1; break;
-              case DEVID_MSM6258: totalChannels += 1; break;
-              case DEVID_MSM6295: totalChannels += 1; break;
-              case DEVID_K054539: totalChannels += 8; break;
-              case DEVID_QSOUND: totalChannels += 16; break;
-              case DEVID_NES_APU: totalChannels += 5; break; // 2 square, 1 triangle, 1 noise, 1 DMC
-              case DEVID_SEGAPCM: totalChannels += 16; break;
-              case DEVID_K051649: totalChannels += 8; break;
-              default: break;
+            case DEVID_SN76496:
+              totalChannels += 4;
+              break;
+            case DEVID_AY8910:
+              totalChannels += 3;
+              break;
+            case DEVID_YM2413:
+              totalChannels += 9;
+              break;
+            case DEVID_YM2612:
+              totalChannels += 6;
+              break;
+            case DEVID_YM2151:
+              totalChannels += 8;
+              break;
+            case DEVID_VBOY_VSU:
+              totalChannels += 8;
+              break;
+            case DEVID_YM2203:
+              totalChannels += 3;
+              break;
+            case DEVID_YM2608:
+              totalChannels += 12;
+              break;
+            case DEVID_YM2610:
+              totalChannels += 12;
+              break;
+            case DEVID_RF5C68:
+              totalChannels += 8;
+              break;
+            case DEVID_SAA1099:
+              totalChannels += 6;
+              break;
+            case DEVID_32X_PWM:
+              totalChannels += 1;
+              break;
+            case DEVID_MSM6258:
+              totalChannels += 1;
+              break;
+            case DEVID_MSM6295:
+              totalChannels += 1;
+              break;
+            case DEVID_K054539:
+              totalChannels += 8;
+              break;
+            case DEVID_QSOUND:
+              totalChannels += 16;
+              break;
+            case DEVID_NES_APU:
+              totalChannels += 5;
+              break; // 2 square, 1 triangle, 1 noise, 1 DMC
+            case DEVID_SEGAPCM:
+              totalChannels += 16;
+              break;
+            case DEVID_K051649:
+              totalChannels += 8;
+              break;
+            default:
+              break;
             }
           }
         }
@@ -2043,11 +2201,13 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelCount(
   return 0;
 }
 
-JNIEXPORT jstring JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelDeviceName(
-    JNIEnv *env, jclass cls, jint index) {
+JNIEXPORT jstring JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelDeviceName(JNIEnv *env,
+                                                              jclass cls,
+                                                              jint index) {
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     // For libgme, voices are per emulator, so just return emulator name
-    const char* sysName = gme_type_system(gme_type(gGmePlayer));
+    const char *sysName = gme_type_system(gme_type(gGmePlayer));
     return env->NewStringUTF(sysName ? sysName : "Unknown");
   } else if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     std::vector<PLR_DEV_INFO> devs;
@@ -2057,36 +2217,76 @@ JNIEXPORT jstring JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelDev
         int devChannelCount = 0;
         if (dev.devDecl) {
           switch (dev.type) {
-            case DEVID_SN76496: devChannelCount = 4; break;
-            case DEVID_AY8910: devChannelCount = 3; break;
-            case DEVID_YM2413: devChannelCount = 9; break;
-            case DEVID_YM2612: devChannelCount = 6; break;
-            case DEVID_YM2151: devChannelCount = 8; break;
-            case DEVID_VBOY_VSU: devChannelCount = 8; break;
-            case DEVID_YM2203: devChannelCount = 3; break;
-            case DEVID_YM2608: devChannelCount = 12; break;
-            case DEVID_YM2610: devChannelCount = 12; break;
-            case DEVID_RF5C68: devChannelCount = 8; break;
-            case DEVID_SAA1099: devChannelCount = 6; break;
-            case DEVID_32X_PWM: devChannelCount = 1; break;
-            case DEVID_MSM6258: devChannelCount = 1; break;
-            case DEVID_MSM6295: devChannelCount = 1; break;
-            case DEVID_K054539: devChannelCount = 8; break;
-            case DEVID_QSOUND: devChannelCount = 16; break;
-            case DEVID_NES_APU: devChannelCount = 5; break;
-            case DEVID_SEGAPCM: devChannelCount = 16; break;
-            case DEVID_K051649: devChannelCount = 8; break;
-            default: break;
+          case DEVID_SN76496:
+            devChannelCount = 4;
+            break;
+          case DEVID_AY8910:
+            devChannelCount = 3;
+            break;
+          case DEVID_YM2413:
+            devChannelCount = 9;
+            break;
+          case DEVID_YM2612:
+            devChannelCount = 6;
+            break;
+          case DEVID_YM2151:
+            devChannelCount = 8;
+            break;
+          case DEVID_VBOY_VSU:
+            devChannelCount = 8;
+            break;
+          case DEVID_YM2203:
+            devChannelCount = 3;
+            break;
+          case DEVID_YM2608:
+            devChannelCount = 12;
+            break;
+          case DEVID_YM2610:
+            devChannelCount = 12;
+            break;
+          case DEVID_RF5C68:
+            devChannelCount = 8;
+            break;
+          case DEVID_SAA1099:
+            devChannelCount = 6;
+            break;
+          case DEVID_32X_PWM:
+            devChannelCount = 1;
+            break;
+          case DEVID_MSM6258:
+            devChannelCount = 1;
+            break;
+          case DEVID_MSM6295:
+            devChannelCount = 1;
+            break;
+          case DEVID_K054539:
+            devChannelCount = 8;
+            break;
+          case DEVID_QSOUND:
+            devChannelCount = 16;
+            break;
+          case DEVID_NES_APU:
+            devChannelCount = 5;
+            break;
+          case DEVID_SEGAPCM:
+            devChannelCount = 16;
+            break;
+          case DEVID_K051649:
+            devChannelCount = 8;
+            break;
+          default:
+            break;
           }
         }
-        
-        if (index >= channelCounter && index < channelCounter + devChannelCount) {
+
+        if (index >= channelCounter &&
+            index < channelCounter + devChannelCount) {
           const char *name = (dev.devDecl && dev.devDecl->name)
                                  ? dev.devDecl->name(dev.devCfg)
                                  : "Unknown";
           return env->NewStringUTF(name ? name : "Unknown");
         }
-        
+
         channelCounter += devChannelCount;
       }
     }
@@ -2094,10 +2294,11 @@ JNIEXPORT jstring JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelDev
   return env->NewStringUTF("");
 }
 
-JNIEXPORT jstring JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelName(
-    JNIEnv *env, jclass cls, jint index) {
+JNIEXPORT jstring JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelName(JNIEnv *env, jclass cls,
+                                                        jint index) {
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
-    const char* voiceName = gme_voice_name(gGmePlayer, index);
+    const char *voiceName = gme_voice_name(gGmePlayer, index);
     return env->NewStringUTF(voiceName ? voiceName : "Unknown");
   } else if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     std::vector<PLR_DEV_INFO> devs;
@@ -2107,36 +2308,76 @@ JNIEXPORT jstring JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelNam
         int devChannelCount = 0;
         if (dev.devDecl) {
           switch (dev.type) {
-            case DEVID_SN76496: devChannelCount = 4; break;
-            case DEVID_AY8910: devChannelCount = 3; break;
-            case DEVID_YM2413: devChannelCount = 9; break;
-            case DEVID_YM2612: devChannelCount = 6; break;
-            case DEVID_YM2151: devChannelCount = 8; break;
-            case DEVID_VBOY_VSU: devChannelCount = 8; break;
-            case DEVID_YM2203: devChannelCount = 3; break;
-            case DEVID_YM2608: devChannelCount = 12; break;
-            case DEVID_YM2610: devChannelCount = 12; break;
-            case DEVID_RF5C68: devChannelCount = 8; break;
-            case DEVID_SAA1099: devChannelCount = 6; break;
-            case DEVID_32X_PWM: devChannelCount = 1; break;
-            case DEVID_MSM6258: devChannelCount = 1; break;
-            case DEVID_MSM6295: devChannelCount = 1; break;
-            case DEVID_K054539: devChannelCount = 8; break;
-            case DEVID_QSOUND: devChannelCount = 16; break;
-            case DEVID_NES_APU: devChannelCount = 5; break;
-            case DEVID_SEGAPCM: devChannelCount = 16; break;
-            case DEVID_K051649: devChannelCount = 8; break;
-            default: break;
+          case DEVID_SN76496:
+            devChannelCount = 4;
+            break;
+          case DEVID_AY8910:
+            devChannelCount = 3;
+            break;
+          case DEVID_YM2413:
+            devChannelCount = 9;
+            break;
+          case DEVID_YM2612:
+            devChannelCount = 6;
+            break;
+          case DEVID_YM2151:
+            devChannelCount = 8;
+            break;
+          case DEVID_VBOY_VSU:
+            devChannelCount = 8;
+            break;
+          case DEVID_YM2203:
+            devChannelCount = 3;
+            break;
+          case DEVID_YM2608:
+            devChannelCount = 12;
+            break;
+          case DEVID_YM2610:
+            devChannelCount = 12;
+            break;
+          case DEVID_RF5C68:
+            devChannelCount = 8;
+            break;
+          case DEVID_SAA1099:
+            devChannelCount = 6;
+            break;
+          case DEVID_32X_PWM:
+            devChannelCount = 1;
+            break;
+          case DEVID_MSM6258:
+            devChannelCount = 1;
+            break;
+          case DEVID_MSM6295:
+            devChannelCount = 1;
+            break;
+          case DEVID_K054539:
+            devChannelCount = 8;
+            break;
+          case DEVID_QSOUND:
+            devChannelCount = 16;
+            break;
+          case DEVID_NES_APU:
+            devChannelCount = 5;
+            break;
+          case DEVID_SEGAPCM:
+            devChannelCount = 16;
+            break;
+          case DEVID_K051649:
+            devChannelCount = 8;
+            break;
+          default:
+            break;
           }
         }
-        
-        if (index >= channelCounter && index < channelCounter + devChannelCount) {
+
+        if (index >= channelCounter &&
+            index < channelCounter + devChannelCount) {
           int channelInDev = index - channelCounter;
           char buffer[64];
           snprintf(buffer, sizeof(buffer), "Channel %d", channelInDev + 1);
           return env->NewStringUTF(buffer);
         }
-        
+
         channelCounter += devChannelCount;
       }
     }
@@ -2144,8 +2385,9 @@ JNIEXPORT jstring JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelNam
   return env->NewStringUTF("");
 }
 
-JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nIsChannelMuted(
-    JNIEnv *env, jclass cls, jint index) {
+JNIEXPORT jboolean JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nIsChannelMuted(JNIEnv *env, jclass cls,
+                                                        jint index) {
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     if (index >= 0 && index < gGmeMutedChannels.size()) {
       return gGmeMutedChannels[index] ? JNI_TRUE : JNI_FALSE;
@@ -2159,41 +2401,82 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nIsChannelMut
         int devChannelCount = 0;
         if (dev.devDecl) {
           switch (dev.type) {
-            case DEVID_SN76496: devChannelCount = 4; break;
-            case DEVID_AY8910: devChannelCount = 3; break;
-            case DEVID_YM2413: devChannelCount = 9; break;
-            case DEVID_YM2612: devChannelCount = 6; break;
-            case DEVID_YM2151: devChannelCount = 8; break;
-            case DEVID_VBOY_VSU: devChannelCount = 8; break;
-            case DEVID_YM2203: devChannelCount = 3; break;
-            case DEVID_YM2608: devChannelCount = 12; break;
-            case DEVID_YM2610: devChannelCount = 12; break;
-            case DEVID_RF5C68: devChannelCount = 8; break;
-            case DEVID_SAA1099: devChannelCount = 6; break;
-            case DEVID_32X_PWM: devChannelCount = 1; break;
-            case DEVID_MSM6258: devChannelCount = 1; break;
-            case DEVID_MSM6295: devChannelCount = 1; break;
-            case DEVID_K054539: devChannelCount = 8; break;
-            case DEVID_QSOUND: devChannelCount = 16; break;
-            case DEVID_NES_APU: devChannelCount = 5; break;
-            case DEVID_SEGAPCM: devChannelCount = 16; break;
-            case DEVID_K051649: devChannelCount = 8; break;
-            default: break;
+          case DEVID_SN76496:
+            devChannelCount = 4;
+            break;
+          case DEVID_AY8910:
+            devChannelCount = 3;
+            break;
+          case DEVID_YM2413:
+            devChannelCount = 9;
+            break;
+          case DEVID_YM2612:
+            devChannelCount = 6;
+            break;
+          case DEVID_YM2151:
+            devChannelCount = 8;
+            break;
+          case DEVID_VBOY_VSU:
+            devChannelCount = 8;
+            break;
+          case DEVID_YM2203:
+            devChannelCount = 3;
+            break;
+          case DEVID_YM2608:
+            devChannelCount = 12;
+            break;
+          case DEVID_YM2610:
+            devChannelCount = 12;
+            break;
+          case DEVID_RF5C68:
+            devChannelCount = 8;
+            break;
+          case DEVID_SAA1099:
+            devChannelCount = 6;
+            break;
+          case DEVID_32X_PWM:
+            devChannelCount = 1;
+            break;
+          case DEVID_MSM6258:
+            devChannelCount = 1;
+            break;
+          case DEVID_MSM6295:
+            devChannelCount = 1;
+            break;
+          case DEVID_K054539:
+            devChannelCount = 8;
+            break;
+          case DEVID_QSOUND:
+            devChannelCount = 16;
+            break;
+          case DEVID_NES_APU:
+            devChannelCount = 5;
+            break;
+          case DEVID_SEGAPCM:
+            devChannelCount = 16;
+            break;
+          case DEVID_K051649:
+            devChannelCount = 8;
+            break;
+          default:
+            break;
           }
         }
-        
-        if (index >= channelCounter && index < channelCounter + devChannelCount) {
+
+        if (index >= channelCounter &&
+            index < channelCounter + devChannelCount) {
           int channelInDev = index - channelCounter;
           PLR_DEV_OPTS devOpts;
           if (gVgmPlayer->GetDeviceOptions(dev.id, devOpts) <= 0x01) {
             // Check if channel is muted in main device or linked device
-            bool isMuted = (devOpts.muteOpts.chnMute[0] & (1 << channelInDev)) != 0 ||
-                          (devOpts.muteOpts.chnMute[1] & (1 << channelInDev)) != 0;
+            bool isMuted =
+                (devOpts.muteOpts.chnMute[0] & (1 << channelInDev)) != 0 ||
+                (devOpts.muteOpts.chnMute[1] & (1 << channelInDev)) != 0;
             return isMuted ? JNI_TRUE : JNI_FALSE;
           }
           return JNI_FALSE;
         }
-        
+
         channelCounter += devChannelCount;
       }
     }
@@ -2219,30 +2502,70 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetChannelMuted(
         int devChannelCount = 0;
         if (dev.devDecl) {
           switch (dev.type) {
-            case DEVID_SN76496: devChannelCount = 4; break;
-            case DEVID_AY8910: devChannelCount = 3; break;
-            case DEVID_YM2413: devChannelCount = 9; break;
-            case DEVID_YM2612: devChannelCount = 6; break;
-            case DEVID_YM2151: devChannelCount = 8; break;
-            case DEVID_VBOY_VSU: devChannelCount = 8; break;
-            case DEVID_YM2203: devChannelCount = 3; break;
-            case DEVID_YM2608: devChannelCount = 12; break;
-            case DEVID_YM2610: devChannelCount = 12; break;
-            case DEVID_RF5C68: devChannelCount = 8; break;
-            case DEVID_SAA1099: devChannelCount = 6; break;
-            case DEVID_32X_PWM: devChannelCount = 1; break;
-            case DEVID_MSM6258: devChannelCount = 1; break;
-            case DEVID_MSM6295: devChannelCount = 1; break;
-            case DEVID_K054539: devChannelCount = 8; break;
-            case DEVID_QSOUND: devChannelCount = 16; break;
-            case DEVID_NES_APU: devChannelCount = 5; break;
-            case DEVID_SEGAPCM: devChannelCount = 16; break;
-            case DEVID_K051649: devChannelCount = 8; break;
-            default: break;
+          case DEVID_SN76496:
+            devChannelCount = 4;
+            break;
+          case DEVID_AY8910:
+            devChannelCount = 3;
+            break;
+          case DEVID_YM2413:
+            devChannelCount = 9;
+            break;
+          case DEVID_YM2612:
+            devChannelCount = 6;
+            break;
+          case DEVID_YM2151:
+            devChannelCount = 8;
+            break;
+          case DEVID_VBOY_VSU:
+            devChannelCount = 8;
+            break;
+          case DEVID_YM2203:
+            devChannelCount = 3;
+            break;
+          case DEVID_YM2608:
+            devChannelCount = 12;
+            break;
+          case DEVID_YM2610:
+            devChannelCount = 12;
+            break;
+          case DEVID_RF5C68:
+            devChannelCount = 8;
+            break;
+          case DEVID_SAA1099:
+            devChannelCount = 6;
+            break;
+          case DEVID_32X_PWM:
+            devChannelCount = 1;
+            break;
+          case DEVID_MSM6258:
+            devChannelCount = 1;
+            break;
+          case DEVID_MSM6295:
+            devChannelCount = 1;
+            break;
+          case DEVID_K054539:
+            devChannelCount = 8;
+            break;
+          case DEVID_QSOUND:
+            devChannelCount = 16;
+            break;
+          case DEVID_NES_APU:
+            devChannelCount = 5;
+            break;
+          case DEVID_SEGAPCM:
+            devChannelCount = 16;
+            break;
+          case DEVID_K051649:
+            devChannelCount = 8;
+            break;
+          default:
+            break;
           }
         }
-        
-        if (index >= channelCounter && index < channelCounter + devChannelCount) {
+
+        if (index >= channelCounter &&
+            index < channelCounter + devChannelCount) {
           int channelInDev = index - channelCounter;
           PLR_DEV_OPTS devOpts;
           if (gVgmPlayer->GetDeviceOptions(dev.id, devOpts) <= 0x01) {
@@ -2255,7 +2578,7 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetChannelMuted(
           }
           break;
         }
-        
+
         channelCounter += devChannelCount;
       }
     }
@@ -2286,14 +2609,15 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetTrack(
         return JNI_FALSE;
       }
       gGmeTrackIndex = trackIndex;
-      
+
       // Apply endless loop settings after starting track
       // For SPC files, this enables true seamless infinite looping
       if (gEndlessLoopMode) {
-        gme_set_fade_msecs(gGmePlayer, -1, 0);  // -1 = disable fade entirely
-        gme_ignore_silence(gGmePlayer, 1);       // disable silence-based end detection
+        gme_set_fade_msecs(gGmePlayer, -1, 0); // -1 = disable fade entirely
+        gme_ignore_silence(gGmePlayer,
+                           1); // disable silence-based end detection
       }
-      
+
       return JNI_TRUE;
     }
   }
@@ -2301,8 +2625,8 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetTrack(
     // KSS track index passed from Kotlin is the actual KSS track number
     // (not a 0-based index) - use it directly
     int actualTrack = trackIndex;
-    LOGD("nSetTrack: KSS request track %d (valid range: %d-%d)", 
-         actualTrack, gKss->trk_min, gKss->trk_max);
+    LOGD("nSetTrack: KSS request track %d (valid range: %d-%d)", actualTrack,
+         gKss->trk_min, gKss->trk_max);
     if (actualTrack >= gKss->trk_min && actualTrack <= gKss->trk_max) {
       KSSPLAY_reset(gKssPlay, actualTrack, 0);
       gKssTrackIndex = actualTrack;
@@ -2325,8 +2649,9 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentTrack(
 }
 
 // Check if file is a multi-track format (NSF, GBS, KSS, etc.)
-JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nIsMultiTrack(
-    JNIEnv *env, jclass cls, jstring jpath) {
+JNIEXPORT jboolean JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nIsMultiTrack(JNIEnv *env, jclass cls,
+                                                      jstring jpath) {
   const char *path = env->GetStringUTFChars(jpath, nullptr);
   bool result = isGmeFormat(path) || isKssFormat(path);
   env->ReleaseStringUTFChars(jpath, path);
@@ -2343,147 +2668,154 @@ JNIEXPORT jlong JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLength(
     Music_Emu *tempEmu;
     gme_err_t err = gme_open_file(path, &tempEmu, gSampleRate);
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (err || !tempEmu) {
       return 0;
     }
-    
+
     int trackCount = gme_track_count(tempEmu);
-    int actualTrackIndex = (trackIndex >= 0 && trackIndex < trackCount) ? trackIndex : 0;
-    
+    int actualTrackIndex =
+        (trackIndex >= 0 && trackIndex < trackCount) ? trackIndex : 0;
+
     gme_info_t *info;
     if (gme_track_info(tempEmu, &info, actualTrackIndex) != 0) {
       gme_delete(tempEmu);
       return 0;
     }
-    
+
     // For NSF/SPC files, play_length is often a default or incorrect value
     // intro_length + loop_length gives more accurate estimate if available
     int length_ms = info->play_length;
     int intro_ms = info->intro_length;
     int loop_ms = info->loop_length;
-    
+
     // Use intro + 2 loops for better estimate if available
     if (intro_ms > 0 && loop_ms > 0) {
       length_ms = intro_ms + loop_ms * 2;
     }
-    
+
     // If length is unreasonably short (< 30 seconds), default to 3 minutes
     // SPC and NSF files typically loop and don't have a fixed duration
     if (length_ms < 30000) {
       length_ms = 180000; // 3 minutes default
     }
-    
+
     gme_free_info(info);
     gme_delete(tempEmu);
-    
+
     // Cast to jlong BEFORE multiplication to avoid integer overflow
     return (jlong)length_ms * gSampleRate / 1000;
   }
 
   // For VGM files, use the regular function (track index is ignored)
   env->ReleaseStringUTFChars(jpath, path);
-  return Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(env, cls, jpath);
+  return Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(env, cls,
+                                                                       jpath);
 }
 
 // Get KSS track count directly from file path (without opening as active track)
-JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackCountDirect(
-    JNIEnv *env, jclass cls, jstring jpath) {
+JNIEXPORT jint JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackCountDirect(JNIEnv *env,
+                                                                jclass cls,
+                                                                jstring jpath) {
   const char *path = env->GetStringUTFChars(jpath, nullptr);
-  
+
   if (!isKssFormat(path)) {
     env->ReleaseStringUTFChars(jpath, path);
     return 1; // Not a KSS file, return 1 track
   }
-  
+
   // Get filename for KSS_bin2kss
   const char *filename = strrchr(path, '/');
   filename = filename ? filename + 1 : path;
-  
+
   // Read file into memory
   FILE *f = fopen(path, "rb");
   env->ReleaseStringUTFChars(jpath, path);
-  
+
   if (!f) {
     LOGE("Failed to open KSS file for track count");
     return 1;
   }
-  
+
   fseek(f, 0, SEEK_END);
   long fileSize = ftell(f);
   fseek(f, 0, SEEK_SET);
-  
+
   std::vector<uint8_t> fileData(fileSize);
   fread(fileData.data(), 1, fileSize, f);
   fclose(f);
-  
+
   // Create temporary KSS object using KSS_bin2kss which properly parses headers
   KSS *kss = KSS_bin2kss(fileData.data(), fileSize, filename);
   if (!kss) {
     LOGE("Failed to create KSS object for track count");
     return 1;
   }
-  
+
   int trackCount = kss->trk_max - kss->trk_min + 1;
   int trkMin = kss->trk_min;
   int trkMax = kss->trk_max;
-  
+
   KSS_delete(kss);
-  
-  LOGD("nGetKssTrackCountDirect: %d tracks (min=%d, max=%d)", trackCount, trkMin, trkMax);
+
+  LOGD("nGetKssTrackCountDirect: %d tracks (min=%d, max=%d)", trackCount,
+       trkMin, trkMax);
   return trackCount;
 }
 
 // Get KSS track range (min and max track numbers)
-JNIEXPORT jintArray JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackRange(
-    JNIEnv *env, jclass cls, jstring jpath) {
+JNIEXPORT jintArray JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackRange(JNIEnv *env,
+                                                          jclass cls,
+                                                          jstring jpath) {
   const char *path = env->GetStringUTFChars(jpath, nullptr);
-  
+
   jintArray result = env->NewIntArray(2);
   if (!result) {
     env->ReleaseStringUTFChars(jpath, path);
     return nullptr;
   }
-  
+
   jint defaults[] = {1, 1}; // Default: track 1 only
   env->SetIntArrayRegion(result, 0, 2, defaults);
-  
+
   if (!isKssFormat(path)) {
     env->ReleaseStringUTFChars(jpath, path);
     return result;
   }
-  
+
   // Get filename for KSS_bin2kss
   const char *filename = strrchr(path, '/');
   filename = filename ? filename + 1 : path;
-  
+
   // Read file into memory
   FILE *f = fopen(path, "rb");
   env->ReleaseStringUTFChars(jpath, path);
-  
+
   if (!f) {
     return result;
   }
-  
+
   fseek(f, 0, SEEK_END);
   long fileSize = ftell(f);
   fseek(f, 0, SEEK_SET);
-  
+
   std::vector<uint8_t> fileData(fileSize);
   fread(fileData.data(), 1, fileSize, f);
   fclose(f);
-  
+
   // Create temporary KSS object using KSS_bin2kss which properly parses headers
   KSS *kss = KSS_bin2kss(fileData.data(), fileSize, filename);
   if (!kss) {
     return result;
   }
-  
+
   jint range[] = {kss->trk_min, kss->trk_max};
   env->SetIntArrayRegion(result, 0, 2, range);
-  
+
   KSS_delete(kss);
-  
+
   return result;
 }
 
