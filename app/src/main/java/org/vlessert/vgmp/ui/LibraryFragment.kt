@@ -229,6 +229,16 @@ class LibraryFragment : Fragment() {
         binding.searchInput.clearFocus()
     }
 
+    fun hasExpandedGames(): Boolean {
+        return if (::adapter.isInitialized) adapter.hasExpanded() else false
+    }
+
+    fun collapseAll() {
+        if (::adapter.isInitialized) {
+            adapter.collapseAll()
+        }
+    }
+
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
@@ -260,6 +270,15 @@ class GameAdapter(
         // with 30+ track views is expanded, because it re-inflates every row.
         games.forEachIndexed { index, game ->
             if (expandedGames.contains(game.id)) notifyItemChanged(index)
+        }
+    }
+
+    fun hasExpanded(): Boolean = expandedGames.isNotEmpty()
+
+    fun collapseAll() {
+        if (expandedGames.isNotEmpty()) {
+            expandedGames.clear()
+            notifyDataSetChanged()
         }
     }
 

@@ -129,6 +129,19 @@ class MainActivity : AppCompatActivity() {
         
         // Setup auto-hide for main screen
         setupMainAutoHide()
+
+        // Handle back button for library minimization
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val libraryFragment = supportFragmentManager.fragments.filterIsInstance<LibraryFragment>().firstOrNull()
+                if (libraryFragment != null && libraryFragment.hasExpandedGames()) {
+                    libraryFragment.collapseAll()
+                } else {
+                    // Minimize app instead of leaving immediately
+                    moveTaskToBack(true)
+                }
+            }
+        })
     }
     
     private fun setupMainAutoHide() {
