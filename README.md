@@ -6,7 +6,8 @@ VGMP is a fast, offline‑first Android player for video game music formats. It 
 - Wide format support (VGM/VGZ, NSF/GBS/SPC, KSS, trackers, MIDI, Doom MUS/LMP, RSN)
 - Offline library with favorites, search, and shuffle/loop modes, slow down to play along
 - VGM Rips downloader with search and chip filters
-- Spectrum analyzer with multiple styles
+- Advanced audio visualization: Full-screen kaleidoscope/bars and per-channel spectrum analyzers
+- Deep audio control: Volume adjustment per sound chip and Mute/Solo per channel
 - Bluetooth media controls (AVRCP‑style playback/seek/metadata)
 - Android Auto/MediaSession integration
 
@@ -35,6 +36,9 @@ VGMP supports the following file types (case‑insensitive):
 ## Setup
 ```bash
 git submodule update --init --recursive
+# Some libraries require patching for advanced features (automatic during build)
+./app/src/main/cpp/prepare_libvgm_source.sh
+./app/src/main/cpp/prepare_libkss_source.sh
 ```
 
 ## Build
