@@ -27,7 +27,7 @@ add_definitions(
 find_package(Git QUIET)
 if(GIT_FOUND)
     # Apply each patch file in the patches directory
-    file(GLOB PATCH_FILES "${CMAKE_CURRENT_SOURCE_DIR}/patches/*.patch")
+    file(GLOB PATCH_FILES "${CMAKE_CURRENT_SOURCE_DIR}/patches/libvgm-*.patch")
     foreach(PATCH_FILE ${PATCH_FILES})
         get_filename_component(PATCH_NAME ${PATCH_FILE} NAME)
         
@@ -106,6 +106,55 @@ if(GIT_FOUND)
                 execute_process(
                     COMMAND ${GIT_EXECUTABLE} apply ${PATCH_FILE}
                     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libpsf
+                    RESULT_VARIABLE PATCH_RESULT
+                    OUTPUT_VARIABLE PATCH_OUTPUT
+                    ERROR_VARIABLE PATCH_ERROR
+                )
+                if(PATCH_RESULT EQUAL 0)
+                    message(STATUS "  Applied successfully")
+                else()
+                    message(WARNING "  Failed to apply patch: ${PATCH_ERROR}")
+                endif()
+            else()
+                message(STATUS "  Patch ${PATCH_NAME} already applied or incompatible (skipping)")
+            endif()
+        else()
+            message(STATUS "  Patch ${PATCH_NAME} already applied (skipping)")
+        endif()
+    endforeach()
+endif()
+
+# Apply patches to libkss before building
+if(GIT_FOUND)
+    # Check for libkss patches
+    file(GLOB KSS_PATCH_FILES "${CMAKE_CURRENT_SOURCE_DIR}/patches/libkss-*.patch")
+    foreach(PATCH_FILE ${KSS_PATCH_FILES})
+        get_filename_component(PATCH_NAME ${PATCH_FILE} NAME)
+        
+        # Check if patch is already applied by trying to apply it in reverse
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} apply --check -R ${PATCH_FILE}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libkss
+            RESULT_VARIABLE PATCH_ALREADY_APPLIED
+            OUTPUT_QUIET
+            ERROR_QUIET
+        )
+        
+        # If reverse patch fails, patch is not applied yet
+        if(NOT PATCH_ALREADY_APPLIED EQUAL 0)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} apply --check ${PATCH_FILE}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libkss
+                RESULT_VARIABLE PATCH_CHECK_RESULT
+                OUTPUT_QUIET
+                ERROR_QUIET
+            )
+            
+            if(PATCH_CHECK_RESULT EQUAL 0)
+                message(STATUS "Applying libkss patch: ${PATCH_NAME}")
+                execute_process(
+                    COMMAND ${GIT_EXECUTABLE} apply ${PATCH_FILE}
+                    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libkss
                     RESULT_VARIABLE PATCH_RESULT
                     OUTPUT_VARIABLE PATCH_OUTPUT
                     ERROR_VARIABLE PATCH_ERROR

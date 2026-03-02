@@ -1,0 +1,238 @@
+diff --git a/src/kssplay.c b/src/kssplay.c
+index eaa2a34..194f9cb 100644
+--- a/src/kssplay.c
++++ b/src/kssplay.c
+@@ -227,6 +227,7 @@ KSSPLAY *KSSPLAY_new(uint32_t rate, uint32_t nch, uint32_t bps) {
+   }
+ 
+   memset(kssplay, 0, sizeof(KSSPLAY));
++  memset(&kssplay->ch_wave, 0, sizeof(kssplay->ch_wave));
+ 
+   if (!(kssplay->vm = VM_new(rate))) {
+     free(kssplay);
+@@ -458,9 +459,9 @@ static inline void process_vm(KSSPLAY *kssplay) {
+   kssplay->step_cnt += kssplay->step_inc;
+   if (step_int > 0) {
+     kssplay->step_cnt -= step_int;
+-    //VM_exec might execute more than step_int cycles
++    // VM_exec might execute more than step_int cycles
+     uint32_t extra_cycles = VM_exec(kssplay->vm, step_int) - step_int;
+-    //correct the step_cnt for the extra cycles
++    // correct the step_cnt for the extra cycles
+     kssplay->step_cnt -= extra_cycles;
+   }
+ }
+@@ -522,28 +523,48 @@ static inline void calc_mono(KSSPLAY *kssplay, int16_t *buf, uint32_t length) {
+     process_vm(kssplay);
+ 
+     if (kssplay->kss->msx_audio && !kssplay->device_mute[KSS_DEVICE_OPL]) {
+-      d = apply_volume(FIR_calc(kssplay->device_fir[0][KSS_DEVICE_OPL], OPL_calc(kssplay->vm->opl)), volume[KSS_DEVICE_OPL]);
++      d = apply_volume(FIR_calc(kssplay->device_fir[0][KSS_DEVICE_OPL], OPL_calc(kssplay->vm->opl)),
++                       volume[KSS_DEVICE_OPL]);
++      for (int c = 0; c < 15; c++) {
++        kssplay->ch_wave.opl[c][kssplay->ch_wave.wave_idx] = kssplay->vm->opl->ch_out[c];
++      }
+     } else {
+       d = 0;
+     }
+ 
+     if (kssplay->kss->fmpac && !kssplay->device_mute[KSS_DEVICE_OPLL]) {
+-      d += apply_volume(FIR_calc(kssplay->device_fir[0][KSS_DEVICE_OPLL], OPLL_calc(kssplay->vm->opll)), volume[KSS_DEVICE_OPLL]);
++      d += apply_volume(FIR_calc(kssplay->device_fir[0][KSS_DEVICE_OPLL], OPLL_calc(kssplay->vm->opll)),
++                        volume[KSS_DEVICE_OPLL]);
++      for (int c = 0; c < 15; c++) {
++        kssplay->ch_wave.opll[c][kssplay->ch_wave.wave_idx] = kssplay->vm->opll->ch_out[c];
++      }
+     }
+ 
+     if (!kssplay->device_mute[KSS_DEVICE_PSG]) {
+       if (kssplay->kss->sn76489) {
+-        d += apply_volume(FIR_calc(kssplay->device_fir[0][KSS_DEVICE_PSG], SNG_calc(kssplay->vm->sng)), volume[KSS_DEVICE_PSG]);
++        d += apply_volume(FIR_calc(kssplay->device_fir[0][KSS_DEVICE_PSG], SNG_calc(kssplay->vm->sng)),
++                          volume[KSS_DEVICE_PSG]);
++        for (int c = 0; c < 4; c++) {
++          kssplay->ch_wave.sng[c][kssplay->ch_wave.wave_idx] = kssplay->vm->sng->ch_out[c];
++        }
+       } else {
+         d += apply_volume(
+             FIR_calc(kssplay->device_fir[0][KSS_DEVICE_PSG], PSG_RateConv_calc(kssplay->psg_rconv) + kssplay->vm->DA1),
+             volume[KSS_DEVICE_PSG]);
++        for (int c = 0; c < 3; c++) {
++          kssplay->ch_wave.psg[c][kssplay->ch_wave.wave_idx] = kssplay->vm->psg->ch_out[c];
++        }
++        kssplay->ch_wave.dac[0][kssplay->ch_wave.wave_idx] = kssplay->vm->DA1;
+       }
+     }
+ 
+     if (!kssplay->device_mute[KSS_DEVICE_SCC]) {
+       d += apply_volume(FIR_calc(kssplay->device_fir[0][KSS_DEVICE_SCC], SCC_calc(kssplay->vm->scc) + kssplay->vm->DA8),
+                         volume[KSS_DEVICE_SCC]);
++      for (int c = 0; c < 5; c++) {
++        kssplay->ch_wave.scc[c][kssplay->ch_wave.wave_idx] = kssplay->vm->scc->ch_out[c];
++      }
++      kssplay->ch_wave.dac[1][kssplay->ch_wave.wave_idx] = kssplay->vm->DA8;
+     }
+ 
+     /* Check silent span */
+@@ -578,6 +599,9 @@ static inline void calc_stereo(KSSPLAY *kssplay, int16_t *buf, uint32_t length)
+       c = FIR_calc(kssplay->device_fir[0][KSS_DEVICE_OPL], OPL_calc(kssplay->vm->opl));
+       ch[0] = apply_volume(c, volume[KSS_DEVICE_OPL][0]);
+       ch[1] = apply_volume(c, volume[KSS_DEVICE_OPL][1]);
++      for (int j = 0; j < 15; j++) {
++        kssplay->ch_wave.opl[j][kssplay->ch_wave.wave_idx] = kssplay->vm->opl->ch_out[j];
++      }
+     } else
+       ch[0] = ch[1] = 0;
+ 
+@@ -591,6 +615,9 @@ static inline void calc_stereo(KSSPLAY *kssplay, int16_t *buf, uint32_t length)
+         ch[0] += apply_volume(c, volume[KSS_DEVICE_OPLL][0]);
+         ch[1] += apply_volume(c, volume[KSS_DEVICE_OPLL][1]);
+       }
++      for (int j = 0; j < 15; j++) {
++        kssplay->ch_wave.opll[j][kssplay->ch_wave.wave_idx] = kssplay->vm->opll->ch_out[j];
++      }
+     }
+ 
+     if (!kssplay->device_mute[KSS_DEVICE_PSG]) {
+@@ -604,10 +631,17 @@ static inline void calc_stereo(KSSPLAY *kssplay, int16_t *buf, uint32_t length)
+           ch[0] += apply_volume(c, volume[KSS_DEVICE_PSG][0]);
+           ch[1] += apply_volume(c, volume[KSS_DEVICE_PSG][1]);
+         }
++        for (int j = 0; j < 4; j++) {
++          kssplay->ch_wave.sng[j][kssplay->ch_wave.wave_idx] = kssplay->vm->sng->ch_out[j];
++        }
+       } else {
+         c = FIR_calc(kssplay->device_fir[0][KSS_DEVICE_PSG], PSG_RateConv_calc(kssplay->psg_rconv) + kssplay->vm->DA1);
+         ch[0] += apply_volume(c, volume[KSS_DEVICE_PSG][0]);
+         ch[1] += apply_volume(c, volume[KSS_DEVICE_PSG][1]);
++        for (int j = 0; j < 3; j++) {
++          kssplay->ch_wave.psg[j][kssplay->ch_wave.wave_idx] = kssplay->vm->psg->ch_out[j];
++        }
++        kssplay->ch_wave.dac[0][kssplay->ch_wave.wave_idx] = kssplay->vm->DA1;
+       }
+     }
+ 
+@@ -615,6 +649,10 @@ static inline void calc_stereo(KSSPLAY *kssplay, int16_t *buf, uint32_t length)
+       c = FIR_calc(kssplay->device_fir[0][KSS_DEVICE_SCC], SCC_calc(kssplay->vm->scc) + kssplay->vm->DA8);
+       ch[0] += apply_volume(c, volume[KSS_DEVICE_SCC][0]);
+       ch[1] += apply_volume(c, volume[KSS_DEVICE_SCC][1]);
++      for (int j = 0; j < 5; j++) {
++        kssplay->ch_wave.scc[j][kssplay->ch_wave.wave_idx] = kssplay->vm->scc->ch_out[j];
++      }
++      kssplay->ch_wave.dac[1][kssplay->ch_wave.wave_idx] = kssplay->vm->DA8;
+     }
+ 
+     /* Check silent span */
+@@ -628,6 +666,7 @@ static inline void calc_stereo(KSSPLAY *kssplay, int16_t *buf, uint32_t length)
+ 
+     ch[0] = fader(kssplay, DCF_calc(kssplay->dcf[0], ch[0]));
+     ch[1] = fader(kssplay, DCF_calc(kssplay->dcf[1], ch[1]));
++    kssplay->ch_wave.wave_idx = (kssplay->ch_wave.wave_idx + 1) % 512;
+     buf[(i << 1)] = compress(RCF_calc(kssplay->rcf[0], ch[0]));
+     buf[(i << 1) + 1] = compress(RCF_calc(kssplay->rcf[1], ch[1]));
+   }
+@@ -737,21 +776,21 @@ uint8_t KSSPLAY_get_MGS_jump_count(KSSPLAY *kssplay) {
+ }
+ 
+ int KSSPLAY_read_device_regs(KSSPLAY *kssplay, KSS_DEVICE device, uint8_t *buf) {
+-  switch(device) {
+-    case KSS_DEVICE_PSG:
+-      memcpy(buf, kssplay->vm->psg->reg, 16);
+-      return 16;
+-    case KSS_DEVICE_SCC:
+-      memcpy(buf, kssplay->vm->scc->wave, 5 * 32);
+-      memcpy(buf + 0xc0, kssplay->vm->scc->reg, 64);
+-      return 256;
+-    case KSS_DEVICE_OPLL:
+-      memcpy(buf, kssplay->vm->opll->reg, 64);
+-      return 64;
+-    case KSS_DEVICE_OPL:
+-      memcpy(buf, kssplay->vm->opl->reg, 256);
+-      return 256;
+-    default:
+-      return 0;
+-  }  
++  switch (device) {
++  case KSS_DEVICE_PSG:
++    memcpy(buf, kssplay->vm->psg->reg, 16);
++    return 16;
++  case KSS_DEVICE_SCC:
++    memcpy(buf, kssplay->vm->scc->wave, 5 * 32);
++    memcpy(buf + 0xc0, kssplay->vm->scc->reg, 64);
++    return 256;
++  case KSS_DEVICE_OPLL:
++    memcpy(buf, kssplay->vm->opll->reg, 64);
++    return 64;
++  case KSS_DEVICE_OPL:
++    memcpy(buf, kssplay->vm->opl->reg, 256);
++    return 256;
++  default:
++    return 0;
++  }
+ }
+diff --git a/src/kssplay.h b/src/kssplay.h
+index 32c31e8..df24372 100644
+--- a/src/kssplay.h
++++ b/src/kssplay.h
+@@ -22,6 +22,25 @@ extern "C" {
+ #define KSSPLAY_MUTE (1 << KSSPLAY_VOL_BITS)
+ #define KSSPLAY_VOL_MASK ((1 << KSSPLAY_VOL_BITS) - 1)
+ 
++typedef struct tagKSSPLAY_PER_CH_OUT {
++  int16_t psg[3];
++  int16_t scc[5];
++  int16_t opll[15];
++  int16_t opl[15];
++  int16_t sng[4];
++  int16_t dac[2];
++} KSSPLAY_PER_CH_OUT;
++
++typedef struct tagKSSPLAY_PER_CH_WAVE {
++  int16_t psg[3][512];
++  int16_t scc[5][512];
++  int16_t opll[15][512];
++  int16_t opl[15][512];
++  int16_t sng[4][512];
++  int16_t dac[2][512];
++  int wave_idx;
++} KSSPLAY_PER_CH_WAVE;
++
+ typedef struct tagKSSPLAY KSSPLAY;
+ struct tagKSSPLAY {
+   KSS *kss;
+@@ -62,6 +81,9 @@ struct tagKSSPLAY {
+   int opll_stereo;
+ 
+   PSG_RateConv *psg_rconv;
++
++  // Custom extension: Wave buffer for FFT
++  struct tagKSSPLAY_PER_CH_WAVE ch_wave;
+ };
+ 
+ /**
+@@ -91,14 +113,6 @@ struct tagKSSPLAY {
+  * dac[0]: 1-bit DAC
+  * dac[1]: SCC 8-bit DAC
+  */
+-typedef struct tagKSSPLAY_PER_CH_OUT {
+-  int16_t psg[3];
+-  int16_t scc[5];
+-  int16_t opll[15];
+-  int16_t opl[15];
+-  int16_t sng[4];
+-  int16_t dac[2];
+-} KSSPLAY_PER_CH_OUT;
+ 
+ enum { KSSPLAY_FADE_NONE = 0, KSSPLAY_FADE_OUT = 1, KSSPLAY_FADE_END = 2 };
+ 
+@@ -168,8 +182,8 @@ uint8_t KSSPLAY_get_MGS_jump_count(KSSPLAY *kssplay);
+ void KSSPLAY_write_memory(KSSPLAY *kssplay, uint32_t a, uint32_t d);
+ void KSSPLAY_write_io(KSSPLAY *kssplay, uint32_t a, uint32_t d);
+ 
+-/** 
+- * Copy device's registers to a buffer. 
++/**
++ * Copy device's registers to a buffer.
+  * @param buf - a pointer to a buffer that is larger than 256 bytes.
+  * @returns number of bytes written.
+  */
