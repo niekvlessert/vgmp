@@ -16,3 +16,6 @@
 [submodule "app/src/main/cpp/libpsf"]
 	path = app/src/main/cpp/libpsf
 	url = https://github.com/CoreDumpling/sexypsf.git
+[submodule "app/src/main/cpp/libMusDoom"]
+	path = app/src/main/cpp/libMusDoom
+	url = https://github.com/niekvlessert/libMusDoom.git
