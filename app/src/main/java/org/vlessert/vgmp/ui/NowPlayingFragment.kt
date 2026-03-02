@@ -65,7 +65,7 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             try {
                 val parent = view.parent as? com.google.android.material.bottomsheet.BottomSheetBehavior<*>
                     ?: com.google.android.material.bottomsheet.BottomSheetBehavior.from(view.parent as android.view.View)
-                parent.peekHeight = binding.toggleControlsRow.bottom + 24.dpToPx()
+                parent.peekHeight = binding.toggleControlsRow.bottom + 8.dpToPx()
             } catch (_: Exception) {}
         }
     }
