@@ -1455,6 +1455,97 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
   env->ReleaseFloatArrayElements(outMagnitudes, dst, 0);
 }
 
+static void compute_channel_spectrum(int16_t wave[512], int wave_idx,
+                                     float *dst_band) {
+  int n = 512;
+  std::vector<Complex> a(n);
+  for (int i = 0; i < n; i++) {
+    float sample = (float)wave[(wave_idx + i) % n] / 32768.0f;
+    float multiplier =
+        0.5f *
+        (1.0f - std::cos(2.0f * 3.14159265f * (float)i / (float)(n - 1)));
+    a[i] = Complex(sample * multiplier, 0.0f);
+  }
+  fft_process(a);
+
+  const int NUM_BANDS = 16;
+  const int BINS_PER_BAND = (n / 2) / NUM_BANDS;
+  for (int b = 0; b < NUM_BANDS; b++) {
+    float maxMag = 0.0f;
+    for (int i = 0; i < BINS_PER_BAND; i++) {
+      float mag = std::abs(a[b * BINS_PER_BAND + i]);
+      if (mag > maxMag)
+        maxMag = mag;
+    }
+    float scaled = maxMag * 16.0f;
+    if (scaled > 1.0f)
+      scaled = 1.0f;
+    dst_band[b] = scaled;
+  }
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelSpectrums(JNIEnv *env,
+                                                             jclass cls) {
+  if (gPlayerType != PlayerType::LIBKSS || !gKssPlay || !gKss)
+    return nullptr;
+
+  int totalChannels = 0;
+  if (!gKssPlay->device_mute[KSS_DEVICE_PSG])
+    totalChannels += gKss->sn76489 ? 4 : 3;
+  if (!gKssPlay->device_mute[KSS_DEVICE_SCC])
+    totalChannels += 5;
+  if (gKss->fmpac && !gKssPlay->device_mute[KSS_DEVICE_OPLL])
+    totalChannels += 15;
+  if (gKss->msx_audio && !gKssPlay->device_mute[KSS_DEVICE_OPL])
+    totalChannels += 15;
+
+  const int BANDS_PER_CH = 16;
+  jfloatArray result = env->NewFloatArray(totalChannels * BANDS_PER_CH);
+  if (!result)
+    return nullptr;
+
+  float *levels = env->GetFloatArrayElements(result, nullptr);
+  int idx = 0;
+  auto &wave = gKssPlay->ch_wave;
+  int w_idx = wave.wave_idx;
+
+  if (!gKssPlay->device_mute[KSS_DEVICE_PSG]) {
+    if (gKss->sn76489) {
+      for (int i = 0; i < 4; i++) {
+        compute_channel_spectrum(wave.sng[i], w_idx,
+                                 &levels[idx++ * BANDS_PER_CH]);
+      }
+    } else {
+      for (int i = 0; i < 3; i++) {
+        compute_channel_spectrum(wave.psg[i], w_idx,
+                                 &levels[idx++ * BANDS_PER_CH]);
+      }
+    }
+  }
+  if (!gKssPlay->device_mute[KSS_DEVICE_SCC]) {
+    for (int i = 0; i < 5; i++) {
+      compute_channel_spectrum(wave.scc[i], w_idx,
+                               &levels[idx++ * BANDS_PER_CH]);
+    }
+  }
+  if (gKss->fmpac && !gKssPlay->device_mute[KSS_DEVICE_OPLL]) {
+    for (int i = 0; i < 15; i++) {
+      compute_channel_spectrum(wave.opll[i], w_idx,
+                               &levels[idx++ * BANDS_PER_CH]);
+    }
+  }
+  if (gKss->msx_audio && !gKssPlay->device_mute[KSS_DEVICE_OPL]) {
+    for (int i = 0; i < 15; i++) {
+      compute_channel_spectrum(wave.opl[i], w_idx,
+                               &levels[idx++ * BANDS_PER_CH]);
+    }
+  }
+
+  env->ReleaseFloatArrayElements(result, levels, 0);
+  return result;
+}
+
 /**
  * Convert UTF-16LE to UTF-8.
  * Simple implementation for Android where iconv is not available.
@@ -2451,6 +2542,41 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelName(JNIEnv *env, jclass cls,
         }
 
         channelCounter += devChannelCount;
+      }
+    }
+  }
+  if (gPlayerType == PlayerType::LIBKSS && gKssPlay && gKss) {
+    int counter = 0;
+    if (!gKssPlay->device_mute[KSS_DEVICE_PSG]) {
+      int count = gKss->sn76489 ? 4 : 3;
+      if (index >= counter && index < counter + count) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%s #%d", gKss->sn76489 ? "SNG" : "PSG", index - counter + 1);
+        return env->NewStringUTF(buf);
+      }
+      counter += count;
+    }
+    if (!gKssPlay->device_mute[KSS_DEVICE_SCC]) {
+      if (index >= counter && index < counter + 5) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "SCC #%d", index - counter + 1);
+        return env->NewStringUTF(buf);
+      }
+      counter += 5;
+    }
+    if (gKss->fmpac && !gKssPlay->device_mute[KSS_DEVICE_OPLL]) {
+      if (index >= counter && index < counter + 15) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "OPLL #%d", index - counter + 1);
+        return env->NewStringUTF(buf);
+      }
+      counter += 15;
+    }
+    if (gKss->msx_audio && !gKssPlay->device_mute[KSS_DEVICE_OPL]) {
+      if (index >= counter && index < counter + 15) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "OPL #%d", index - counter + 1);
+        return env->NewStringUTF(buf);
       }
     }
   }

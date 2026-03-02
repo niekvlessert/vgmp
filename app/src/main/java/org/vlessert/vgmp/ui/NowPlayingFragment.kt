@@ -23,6 +23,7 @@ import org.vlessert.vgmp.databinding.FragmentNowPlayingBinding
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.library.GameLibrary
 import org.vlessert.vgmp.service.VgmPlaybackService
+import org.vlessert.vgmp.ui.views.ChannelSpectrumView
 import java.io.File
 
 class NowPlayingFragment : BottomSheetDialogFragment() {
@@ -58,7 +59,18 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         updateUI()
         startPositionUpdater()
         observePlaybackInfo()
+
+        // Set peek height after layout so the sheet only shows content up to the toggle buttons row
+        view.post {
+            try {
+                val parent = view.parent as? com.google.android.material.bottomsheet.BottomSheetBehavior<*>
+                    ?: com.google.android.material.bottomsheet.BottomSheetBehavior.from(view.parent as android.view.View)
+                parent.peekHeight = binding.toggleControlsRow.bottom + 24.dpToPx()
+            } catch (_: Exception) {}
+        }
     }
+
+    private fun Int.dpToPx(): Int = (this * resources.displayMetrics.density + 0.5f).toInt()
     
     // Helper extension for building colored spanned strings
     private fun buildSpannedString(builderAction: SpannableStringBuilder.() -> Unit): Spanned {
@@ -91,6 +103,59 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                     binding.tvTotalTime.text = formatTime(info.durationMs)
                 }
                 updateEndlessLoopButton()
+            }
+        }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            svc.channelSpectrums.collectLatest { spectrums ->
+                updateChannelSpectrums(spectrums)
+            }
+        }
+    }
+
+    private fun updateChannelSpectrums(spectrums: FloatArray?) {
+        val container = binding.channelsMeterContainer
+        if (spectrums == null || spectrums.isEmpty()) {
+            container.visibility = View.GONE
+            return
+        }
+
+        container.visibility = View.VISIBLE
+        
+        val BANDS_PER_CH = 16
+        val channelCount = spectrums.size / BANDS_PER_CH
+
+        // Dynamically add views if count doesn't match
+        if (container.childCount != channelCount) {
+            container.removeAllViews()
+            
+            viewLifecycleOwner.lifecycleScope.launch {
+                val names = mutableListOf<String>()
+                for (i in 0 until channelCount) {
+                    names.add(VgmEngine.getChannelName(i))
+                }
+                
+                // Construct Grid Layout
+                for (i in 0 until channelCount) {
+                    val view = layoutInflater.inflate(R.layout.item_vu_meter, container, false)
+                    val tvName = view.findViewById<TextView>(R.id.tv_channel_name)
+                    tvName.text = names[i]
+                    container.addView(view)
+                }
+                
+                // Initialize spectrums
+                for (i in 0 until channelCount) {
+                    val view = container.getChildAt(i)
+                    val spectrumView = view.findViewById<ChannelSpectrumView>(R.id.channel_spectrum)
+                    spectrumView.setSpectrum(spectrums, i * BANDS_PER_CH)
+                }
+            }
+        } else {
+            // Update existing views
+            for (i in 0 until channelCount) {
+                val view = container.getChildAt(i) ?: continue
+                val spectrumView = view.findViewById<ChannelSpectrumView>(R.id.channel_spectrum)
+                spectrumView.setSpectrum(spectrums, i * BANDS_PER_CH)
             }
         }
     }

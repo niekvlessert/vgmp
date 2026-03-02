@@ -89,6 +89,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private val _spectrum = MutableStateFlow(FloatArray(512))
     val spectrum: StateFlow<FloatArray> = _spectrum.asStateFlow()
     private val spectrumBuffer = FloatArray(512)
+    
+    // Channel spectrums thread
+    private val _channelSpectrums = MutableStateFlow<FloatArray?>(null)
+    val channelSpectrums: StateFlow<FloatArray?> = _channelSpectrums.asStateFlow()
+    
     private var lastSpectrumUpdateMs = 0L
     private val SPECTRUM_UPDATE_INTERVAL_MS = 33L // ~30 fps for smoother UI
 
@@ -501,6 +506,15 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                             lastSpectrumUpdateMs = nowSpectrum
                             VgmEngine.getSpectrum(spectrumBuffer)
                             _spectrum.emit(spectrumBuffer.copyOf())
+                            // Channel levels for KSS
+                            val trackPath = _playbackState.value.track?.filePath ?: ""
+                            if (trackPath.endsWith(".kss", ignoreCase = true) ||
+                                trackPath.endsWith(".mgs", ignoreCase = true)) {
+                                val spectrums = VgmEngine.getChannelSpectrums()
+                                _channelSpectrums.emit(spectrums)
+                            } else {
+                                _channelSpectrums.emit(null)
+                            }
                         }
                     } else {
                         // fillBuffer returned 0 — PSF generation thread hasn't caught up yet.

@@ -55,6 +55,7 @@ object VgmEngine {
     @JvmStatic external fun nGetChannelName(index: Int): String
     @JvmStatic external fun nIsChannelMuted(index: Int): Boolean
     @JvmStatic external fun nSetChannelMuted(index: Int, muted: Boolean)
+    @JvmStatic external fun nGetChannelSpectrums(): FloatArray?
 
     // libgme multi-track support (NSF, GBS, etc.)
     @JvmStatic external fun nGetTrackCount(): Int
@@ -112,6 +113,7 @@ object VgmEngine {
     suspend fun getChannelName(index: Int): String = mutex.withLock { nGetChannelName(index) }
     suspend fun isChannelMuted(index: Int): Boolean = mutex.withLock { nIsChannelMuted(index) }
     suspend fun setChannelMuted(index: Int, muted: Boolean) = mutex.withLock { nSetChannelMuted(index, muted) }
+    suspend fun getChannelSpectrums(): FloatArray? = mutex.withLock { nGetChannelSpectrums() }
     
     // Multi-track support (NSF, GBS, etc.)
     suspend fun getTrackCount(): Int = mutex.withLock { nGetTrackCount() }

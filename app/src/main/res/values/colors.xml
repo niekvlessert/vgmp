@@ -11,6 +11,12 @@
     <color name="vgmp_divider">#FF3a3a3a</color>
     <color name="vgmp_track_active_bg">#FF1a3a2a</color>
     <color name="vgmp_transparent">#00000000</color>
+    
+    <!-- VU Meter Colors -->
+    <color name="vgmp_meter_green">#FF00FF00</color>
+    <color name="vgmp_meter_yellow">#FFFFFF00</color>
+    <color name="vgmp_meter_red">#FFFF0000</color>
+    
     <!-- Material3 color slots -->
     <color name="colorPrimary">#FF00ff66</color>
     <color name="colorPrimaryDark">#FF00aa44</color>

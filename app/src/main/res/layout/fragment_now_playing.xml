@@ -4,7 +4,6 @@
     android:id="@+id/content_scroll"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true"
     android:background="#E61a1a1a">
 
         <LinearLayout
@@ -214,6 +213,7 @@
 
             <!-- Toggle controls -->
             <LinearLayout
+                android:id="@+id/toggleControlsRow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -249,6 +249,16 @@
                     android:tint="@color/vgmp_text_secondary"
                     android:contentDescription="Playback speed" />
             </LinearLayout>
+
+            <!-- Channel VU Meters -->
+            <GridLayout
+                android:id="@+id/channels_meter_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:layout_marginHorizontal="16dp"
+                android:columnCount="3"
+                android:visibility="gone" />
 
             <!-- Chip Volumes divider -->
             <TextView
